@@ -84,9 +84,9 @@
       "dest_root": "engine_models",
       "dest_subfolder": "audio/bandit",
       "filename": "model_bandit_plus_dnr_sdr_11.47.chpt",
-      "url": "",
+      "url": "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v.1.0.3/model_bandit_plus_dnr_sdr_11.47.chpt",
       "version": "sdr_11.47",
-      "sha256": "",
+      "sha256": "c48284779f7d1258a6527d3aaa18a532d45c1f506e2dcc25d5ab179a8c5e2573",
       "required": false,
       "note": "Optional (~142 MB). Only needed for the 'Remove background music' option. Splits audio into speech/music/effects and drops the music (keeps dialogue + SFX). BandIt Plus checkpoint from ZFTurbo's Music-Source-Separation-Training. No official single-file URL — use 'Locate existing file', or fetch model_bandit_plus_dnr_sdr_11.47.chpt via the MSST model list (github.com/ZFTurbo/Music-Source-Separation-Training)."
     }
