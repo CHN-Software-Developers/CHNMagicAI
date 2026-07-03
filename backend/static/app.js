@@ -1,4 +1,6 @@
-/* AIVideoBuilder frontend — 3-phase stepper flow + LTX Director 2 style timeline. */
+/* AIVideoBuilder frontend — 3-phase stepper flow + LTX Director 2 style timeline.
+   Main (VIDEO) track = docked shots that partition the duration. Motion (VIDEO) and AUDIO
+   tracks hold free-placement clips you can drag anywhere and resize from either edge. */
 const $ = (id) => document.getElementById(id);
 const api = (p, opts) => fetch(p, opts).then((r) => r.json());
 
@@ -14,9 +16,12 @@ const STAGE_ORDER = [
 
 const state = {
   config: null,
-  segments: [],      // main track: [{id,type,prompt,length,imageFile,imageB64,isEndFrame}]
+  segments: [],       // main track: [{id,type,prompt,length,imageFile,imageB64,isEndFrame}]
+  audioClips: [],     // free: [{id,kind:'audio',file,url,name,start,length,trimStart,voice}]
+  videoClips: [],     // free: [{id,kind:'video',file,url,name,start,length,trimStart}]  (motion)
   models: [],
-  selectedId: null,
+  selectedId: null,       // selected main shot
+  selectedClipId: null,   // selected audio/video clip
   hasResult: false,
   generating: false,
 };
@@ -79,7 +84,6 @@ function setPhase(p) {
     const cur = PHASES.indexOf(p);
     el.classList.toggle("active", el.dataset.step === p);
     el.classList.toggle("done", idx < cur);
-    // navigability
     if (el.dataset.step === "setup") el.disabled = false;
     else if (el.dataset.step === "generating") el.disabled = !(state.generating || p === "generating");
     else if (el.dataset.step === "result") el.disabled = !state.hasResult;
@@ -93,7 +97,14 @@ function frames() {
   return Math.max(state.segments.length * MIN_LEN, Math.round(dur * fps));
 }
 
-/* Scale segment lengths proportionally so they exactly fill the total frame count. */
+// The shared frame axis: main shots always fitToTotal() to frames(), so their sum == frames();
+// clips live over the same axis. Guard with a floor of 1.
+function totalFrames() {
+  const mainSum = state.segments.reduce((a, s) => a + s.length, 0);
+  return Math.max(mainSum, frames(), 1);
+}
+
+/* Scale main segment lengths proportionally so they exactly fill the total frame count. */
 function fitToTotal() {
   const n = state.segments.length;
   if (n === 0) return;
@@ -102,7 +113,6 @@ function fitToTotal() {
   if (sum <= 0) { const per = Math.floor(total / n); state.segments.forEach((s) => (s.length = per)); sum = per * n; }
   const scale = total / sum;
   state.segments.forEach((s) => (s.length = Math.max(MIN_LEN, Math.round(s.length * scale))));
-  // fix rounding drift on the last segment
   let ns = state.segments.reduce((a, s) => a + s.length, 0);
   const last = state.segments[n - 1];
   last.length = Math.max(MIN_LEN, last.length + (total - ns));
@@ -137,17 +147,16 @@ function removeSegment(id) {
 function renderTimeline() {
   renderRuler();
   renderMain();
-  renderAuto();
+  renderClips();
   updateTimelineInfo();
 }
 
 function renderRuler() {
   const ruler = $("tlRuler");
   ruler.innerHTML = "";
-  const total = state.segments.reduce((a, s) => a + s.length, 0) || frames();
+  const total = totalFrames();
   const fps = parseFloat($("fps").value) || 24;
   const totalSecs = total / fps;
-  // aim for <= 12 labels
   let stepSec = 1;
   [1, 2, 5, 10, 15, 30, 60].some((c) => (totalSecs / c <= 12 ? ((stepSec = c), true) : false));
   for (let sec = 0; sec <= totalSecs + 0.001; sec += stepSec) {
@@ -163,7 +172,7 @@ function renderRuler() {
 function renderMain() {
   const lane = $("laneMain");
   lane.innerHTML = "";
-  const total = state.segments.reduce((a, s) => a + s.length, 0) || 1;
+  const total = totalFrames();
   let cursor = 0;
   state.segments.forEach((s, idx) => {
     const start = cursor; cursor += s.length;
@@ -188,16 +197,49 @@ function renderMain() {
   bindBlockPointer(lane);
 }
 
-function renderAuto() {
-  const motionOn = $("useMotion").checked, audioOn = $("useAudio").checked;
-  const m = $("laneMotion"), a = $("laneAudio");
-  m.parentElement.classList.toggle("off", !motionOn);
-  a.parentElement.classList.toggle("off", !audioOn);
-  m.innerHTML = motionOn ? `<div class="tl-auto">Auto motion guidance (follows your shots)</div>` : `<div class="tl-auto">Motion off</div>`;
-  a.innerHTML = audioOn ? `<div class="tl-auto">Auto audio generated for the full clip</div>` : `<div class="tl-auto">Audio off</div>`;
+/* Free-placement lanes: motion (video) + audio. */
+function renderClips() {
+  renderLane("video", state.videoClips, $("laneMotion"), $("useMotion").checked,
+             "Auto motion guidance (follows your shots)", "Motion off");
+  renderLane("audio", state.audioClips, $("laneAudio"), $("useAudio").checked,
+             "Auto audio generated for the full clip", "Audio off");
 }
 
-/* ------------------------------- timeline interaction ------------------------------- */
+function renderLane(kind, clips, lane, autoOn, autoText, offText) {
+  const track = lane.parentElement;
+  track.classList.toggle("off", !autoOn && clips.length === 0);
+  lane.innerHTML = "";
+  if (clips.length === 0) {
+    lane.innerHTML = `<div class="tl-auto">${autoOn ? autoText : offText}</div>`;
+    return;
+  }
+  const total = totalFrames();
+  const lip = kind === "audio" && $("lipSync").checked;
+  clips.forEach((c) => {
+    const el = document.createElement("div");
+    el.className = `tl-clip ${kind}` +
+      (c.id === state.selectedClipId ? " selected" : "") +
+      (kind === "audio" && c.voice ? " voice" : "");
+    el.dataset.id = c.id;
+    el.style.left = `${(Math.max(0, c.start) / total) * 100}%`;
+    el.style.width = `${(Math.max(MIN_LEN, c.length) / total) * 100}%`;
+    const kindLabel = kind === "audio" ? (c.voice ? "VOICE" : "AUDIO") : "VIDEO";
+    el.innerHTML =
+      `<span class="c-kind">${kindLabel}</span>` +
+      `<div class="c-handle left" data-handle="left"></div>` +
+      `<div class="c-handle right" data-handle="right"></div>` +
+      `<div class="c-label">${escapeHtml(c.name)}</div>`;
+    lane.appendChild(el);
+  });
+  if (lip && clips.some((c) => c.voice)) {
+    const b = document.createElement("div");
+    b.className = "tl-lipbadge"; b.textContent = "LIP-SYNC";
+    lane.appendChild(b);
+  }
+  bindClipPointer(lane, kind);
+}
+
+/* ------------------------------- main-track interaction ------------------------------- */
 function bindBlockPointer(lane) {
   lane.querySelectorAll(".tl-block").forEach((block) => {
     block.addEventListener("pointerdown", (e) => onBlockDown(e, block, lane));
@@ -209,14 +251,12 @@ function onBlockDown(e, block, lane) {
   const id = block.dataset.id;
   const isHandle = e.target.dataset.handle === "1";
   const laneRect = lane.getBoundingClientRect();
-  const total = state.segments.reduce((a, s) => a + s.length, 0) || 1;
+  const total = totalFrames();
   const startX = e.clientX;
   let moved = false;
-
   const idxOf = (sid) => state.segments.findIndex((s) => s.id === sid);
 
   if (isHandle) {
-    // resize boundary between this segment and the next
     const i = idxOf(id);
     const l0 = state.segments[i].length, r0 = state.segments[i + 1].length;
     const onMove = (ev) => {
@@ -234,7 +274,6 @@ function onBlockDown(e, block, lane) {
     return;
   }
 
-  // move / reorder (or click to select if no movement)
   block.classList.add("dragging");
   const onMove = (ev) => {
     if (Math.abs(ev.clientX - startX) > 4) moved = true;
@@ -263,12 +302,65 @@ function onBlockDown(e, block, lane) {
   document.addEventListener("pointerup", onUp);
 }
 
-/* ------------------------------- segment editor ------------------------------- */
+/* ------------------------------- clip (audio/video) interaction ------------------------------- */
+function clipsOf(kind) { return kind === "audio" ? state.audioClips : state.videoClips; }
+function findClip(id) { return state.audioClips.find((c) => c.id === id) || state.videoClips.find((c) => c.id === id); }
+
+function bindClipPointer(lane, kind) {
+  lane.querySelectorAll(".tl-clip").forEach((el) => {
+    el.addEventListener("pointerdown", (e) => onClipDown(e, el, lane, kind));
+  });
+}
+
+function onClipDown(e, el, lane, kind) {
+  e.preventDefault();
+  const id = el.dataset.id;
+  const c = clipsOf(kind).find((x) => x.id === id);
+  if (!c) return;
+  const handle = e.target.dataset.handle; // 'left' | 'right' | undefined (move)
+  const laneRect = lane.getBoundingClientRect();
+  const total = totalFrames();
+  const startX = e.clientX;
+  const c0 = { start: c.start, length: c.length, trimStart: c.trimStart || 0 };
+  let moved = false;
+  el.classList.add("dragging");
+  const toFrames = (dx) => Math.round((dx / laneRect.width) * total);
+
+  const onMove = (ev) => {
+    const d = toFrames(ev.clientX - startX);
+    if (Math.abs(ev.clientX - startX) > 3) moved = true;
+    if (handle === "right") {
+      c.length = Math.max(MIN_LEN, c0.length + d);
+    } else if (handle === "left") {
+      const lo = Math.max(-c0.start, -c0.trimStart);
+      const hi = c0.length - MIN_LEN;
+      const nd = Math.max(lo, Math.min(hi, d));
+      c.start = c0.start + nd;
+      c.trimStart = c0.trimStart + nd;
+      c.length = c0.length - nd;
+    } else {
+      c.start = Math.max(0, Math.min(c0.start + d, total - MIN_LEN));
+    }
+    renderTimeline();
+    if (state.selectedClipId === id) refreshClipEditor();
+  };
+  const onUp = () => {
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", onUp);
+    if (!moved) selectClip(id);
+    renderTimeline();
+  };
+  document.addEventListener("pointermove", onMove);
+  document.addEventListener("pointerup", onUp);
+}
+
+/* ------------------------------- main-shot editor ------------------------------- */
 function selectSegment(id) {
+  state.selectedClipId = null; $("clipEditor").classList.add("hidden");
   state.selectedId = id;
   const s = state.segments.find((x) => x.id === id);
   if (!s) return;
-  renderMain();
+  renderTimeline();
   const ed = $("segEditor");
   ed.classList.remove("hidden");
   $("segEditorTitle").textContent = s.type === "image" ? "Image shot" : "Text shot";
@@ -287,6 +379,78 @@ function refreshSegEditorLen() {
   $("segSecs").textContent = (s.length / fps).toFixed(1);
 }
 
+/* ------------------------------- clip editor ------------------------------- */
+function selectClip(id) {
+  state.selectedId = null; $("segEditor").classList.add("hidden");
+  state.selectedClipId = id;
+  const c = findClip(id);
+  if (!c) return;
+  renderTimeline();
+  const ed = $("clipEditor");
+  ed.classList.remove("hidden");
+  $("clipEditorTitle").textContent = c.kind === "audio" ? (c.voice ? "Voice clip" : "Audio clip") : "Motion video clip";
+  $("clipMediaWrap").innerHTML = c.kind === "audio"
+    ? `<audio controls src="${c.url}"></audio>`
+    : `<video controls muted playsinline src="${c.url}"></video>`;
+  const vw = $("clipVoiceWrap");
+  if (c.kind === "audio") { vw.classList.remove("hidden"); $("clipVoice").checked = !!c.voice; }
+  else vw.classList.add("hidden");
+  refreshClipEditor();
+}
+
+function refreshClipEditor() {
+  const c = findClip(state.selectedClipId);
+  if (!c) return;
+  const fps = parseFloat($("fps").value) || 24;
+  $("clipStart").textContent = c.start;
+  $("clipLen").textContent = c.length;
+  $("clipSecs").textContent = (c.length / fps).toFixed(1);
+}
+
+function removeClip(id) {
+  state.audioClips = state.audioClips.filter((c) => c.id !== id);
+  state.videoClips = state.videoClips.filter((c) => c.id !== id);
+  if (state.selectedClipId === id) { state.selectedClipId = null; $("clipEditor").classList.add("hidden"); }
+  renderTimeline();
+}
+
+/* ------------------------------- media upload ------------------------------- */
+function uploadMedia(kind, cb) {
+  const input = kind === "audio" ? $("audioFileInput") : $("videoFileInput");
+  input.value = "";
+  input.onchange = async () => {
+    if (!input.files[0]) return;
+    const fd = new FormData();
+    fd.append("file", input.files[0]);
+    const res = await fetch("/api/upload-media", { method: "POST", body: fd }).then((r) => r.json());
+    cb(res);
+  };
+  input.click();
+}
+
+// Probe real media duration (seconds) so the clip's default length matches the file.
+function probeDuration(url, kind, done) {
+  const el = document.createElement(kind === "video" ? "video" : "audio");
+  el.preload = "metadata"; el.src = url;
+  el.onloadedmetadata = () => done(isFinite(el.duration) ? el.duration : 0);
+  el.onerror = () => done(0);
+}
+
+function addMediaClip(kind, res) {
+  const fps = parseFloat($("fps").value) || 24;
+  probeDuration(res.url, kind, (dur) => {
+    const total = totalFrames();
+    let len = dur > 0 ? Math.round(dur * fps) : total;
+    len = Math.max(MIN_LEN, Math.min(len, total));
+    const clip = { id: newId(), kind, file: res.file, url: res.url, name: res.name,
+                   start: 0, length: len, trimStart: 0 };
+    if (kind === "audio") { clip.voice = true; state.audioClips.push(clip); }
+    else state.videoClips.push(clip);
+    renderTimeline();
+    selectClip(clip.id);
+  });
+}
+
 /* ------------------------------- generate ------------------------------- */
 function buildTimelineData() {
   let cursor = 0;
@@ -296,19 +460,27 @@ function buildTimelineData() {
     cursor += s.length;
     return seg;
   });
+  const audioSegments = state.audioClips.map((c) => ({
+    id: c.id, audioFile: c.file, start: c.start, length: c.length, trimStart: c.trimStart || 0, voice: !!c.voice,
+  }));
+  const motionSegments = state.videoClips.map((c) => ({
+    id: c.id, videoFile: c.file, start: c.start, length: c.length, trimStart: c.trimStart || 0,
+  }));
   return {
     mainTrackEnabled: true, audioTrackEnabled: $("useAudio").checked,
     motionTrackEnabled: $("useMotion").checked, showFilenames: true,
-    overrideAudio: false, inpaint_audio: $("inpaintAudio").checked,
+    overrideAudio: $("overrideAudio").checked, inpaint_audio: $("inpaintAudio").checked,
     global_prompt: $("globalPrompt").value, retake_global_prompt: "",
     retakeMode: false, retakeStart: 0, retakeLength: 0, retakePrompt: "",
     retakeStrength: 1, retakeVideo: null,
     normalStartFrame: 0, normalDurationFrames: cursor,
-    segments, motionSegments: [], audioSegments: [],
+    segments, motionSegments, audioSegments,
   };
 }
 
 async function generate() {
+  const hasAudioClips = state.audioClips.length > 0;
+  const lip = $("lipSync").checked;
   const params = {
     timeline: buildTimelineData(),
     resolution: $("resolution").value,
@@ -321,10 +493,12 @@ async function generate() {
     img_compression: parseInt($("imgCompression").value),
     epsilon: parseFloat($("epsilon").value),
     guide_strength: $("guideStrength").value,
-    use_custom_audio: $("useAudio").checked,
+    // Use the provided timeline audio (and let the joint model sync video to it) whenever the
+    // user loaded audio clips or ticked Lip-sync; otherwise generate audio from scratch.
+    use_custom_audio: hasAudioClips || lip,
     use_custom_motion: $("useMotion").checked,
-    inpaint_audio: $("inpaintAudio").checked,
-    enable_bg_music_removal: $("bgMusicRemoval").checked,
+    inpaint_audio: lip ? true : $("inpaintAudio").checked,
+    override_audio: $("overrideAudio").checked,
     seed: parseInt($("seed").value) || 0,
     seed_mode: $("seedRandom").checked ? "randomize" : "fixed",
   };
@@ -460,7 +634,7 @@ function refreshModelBadge() {
 async function openModels() {
   state.models = await api("/api/models");
   renderModels();
-  $("modelsModal").classList.remove("hidden");
+  openModal("modelsModal");
 }
 
 function renderModels() {
@@ -558,21 +732,34 @@ function replaceImage() {
   uploadFor((res) => { s.imageFile = res.imageFile; s.imageB64 = res.imageB64; s.type = "image"; renderTimeline(); selectSegment(s.id); });
 }
 
+/* ------------------------------- modals ------------------------------- */
+function openModal(id) { $(id).classList.add("open"); }
+function closeModal(id) { $(id).classList.remove("open"); }
+
 /* ------------------------------- events / utils ------------------------------- */
 function wireEvents() {
   $("addText").addEventListener("click", () => addSegment("text", ""));
   $("addImage").addEventListener("click", pickImage);
+  $("addAudio").addEventListener("click", () => uploadMedia("audio", (res) => addMediaClip("audio", res)));
+  $("addVideo").addEventListener("click", () => uploadMedia("video", (res) => addMediaClip("video", res)));
   $("generate").addEventListener("click", generate);
   $("interrupt").addEventListener("click", () => api("/api/interrupt", { method: "POST" }));
+
   $("openModels").addEventListener("click", openModels);
-  $("closeModels").addEventListener("click", () => $("modelsModal").classList.add("hidden"));
+  $("closeModels").addEventListener("click", () => closeModal("modelsModal"));
+  $("openAdvanced").addEventListener("click", () => openModal("advancedModal"));
+  $("closeAdvanced").addEventListener("click", () => closeModal("advancedModal"));
+  // click on backdrop closes the modal
+  document.querySelectorAll(".modal").forEach((m) =>
+    m.addEventListener("pointerdown", (e) => { if (e.target === m) closeModal(m.id); }));
 
   $("duration").addEventListener("change", () => { fitToTotal(); renderTimeline(); });
   $("fps").addEventListener("change", () => { fitToTotal(); renderTimeline(); });
-  $("useMotion").addEventListener("change", renderAuto);
-  $("useAudio").addEventListener("change", renderAuto);
+  $("useMotion").addEventListener("change", renderClips);
+  $("useAudio").addEventListener("change", renderClips);
+  $("lipSync").addEventListener("change", renderClips);
 
-  // segment editor
+  // main-shot editor
   $("segPrompt").addEventListener("input", (e) => {
     const s = state.segments.find((x) => x.id === state.selectedId);
     if (s) { s.prompt = e.target.value; renderMain(); }
@@ -580,6 +767,14 @@ function wireEvents() {
   $("segClose").addEventListener("click", () => { state.selectedId = null; $("segEditor").classList.add("hidden"); renderMain(); });
   $("segDelete").addEventListener("click", () => { if (state.selectedId) removeSegment(state.selectedId); });
   $("segReplaceImg").addEventListener("click", replaceImage);
+
+  // clip editor
+  $("clipClose").addEventListener("click", () => { state.selectedClipId = null; $("clipEditor").classList.add("hidden"); renderClips(); });
+  $("clipDelete").addEventListener("click", () => { if (state.selectedClipId) removeClip(state.selectedClipId); });
+  $("clipVoice").addEventListener("change", (e) => {
+    const c = findClip(state.selectedClipId);
+    if (c) { c.voice = e.target.checked; renderTimeline(); selectClip(c.id); }
+  });
 
   // stepper navigation
   document.querySelectorAll(".stepper .step").forEach((el) => {

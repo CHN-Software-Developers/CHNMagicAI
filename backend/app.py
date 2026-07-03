@@ -279,6 +279,46 @@ async def api_upload_image(file: UploadFile = File(...)):
     }
 
 
+# Audio/video for the timeline (LTX Director reads audioFile/videoFile from the engine input dir).
+# ComfyUI's /upload/image path is image-only, so we write media straight into the engine input
+# folder the node scans (input/whatdreamscost/) and hand back the relative path + a playback URL.
+_MEDIA_SUBFOLDER = "whatdreamscost"
+
+
+def _safe_name(name: str) -> str:
+    keep = "-_.() "
+    base = os.path.basename(name or "clip")
+    cleaned = "".join(c for c in base if c.isalnum() or c in keep).strip() or "clip"
+    return cleaned
+
+
+@app.post("/api/upload-media")
+async def api_upload_media(file: UploadFile = File(...)):
+    data = await file.read()
+    input_dir = os.path.join(ROOT, settings["engine_dir"], "input", _MEDIA_SUBFOLDER)
+    os.makedirs(input_dir, exist_ok=True)
+    name = _safe_name(file.filename)
+    dest = os.path.join(input_dir, name)
+    # de-dupe: append a counter if a different file already claims this name
+    if os.path.isfile(dest):
+        stem, ext = os.path.splitext(name)
+        i = 1
+        while os.path.isfile(os.path.join(input_dir, f"{stem}_{i}{ext}")):
+            i += 1
+        name = f"{stem}_{i}{ext}"
+        dest = os.path.join(input_dir, name)
+    with open(dest, "wb") as f:
+        f.write(data)
+    kind = "video" if (file.content_type or "").startswith("video") or \
+        name.lower().endswith((".mp4", ".webm", ".mov", ".mkv")) else "audio"
+    return {
+        "file": f"{_MEDIA_SUBFOLDER}/{name}",
+        "name": name,
+        "kind": kind,
+        "url": f"/api/media?filename={name}&subfolder={_MEDIA_SUBFOLDER}&type=input",
+    }
+
+
 @app.post("/api/generate")
 async def api_generate(req: Request):
     params = await req.json()

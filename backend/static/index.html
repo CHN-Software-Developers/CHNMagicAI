@@ -84,8 +84,11 @@
             <h3>Timeline</h3>
             <div class="timeline-info"><span id="tlTotal">0 frames</span> · <span id="tlDur">0.0s</span></div>
             <div class="timeline-actions">
-              <button class="btn btn-sm" id="addText">+ Text shot</button>
-              <button class="btn btn-sm" id="addImage">+ Image shot</button>
+              <button class="btn btn-sm" id="addText">+ Text</button>
+              <button class="btn btn-sm" id="addImage">+ Image</button>
+              <button class="btn btn-sm" id="addAudio">+ Audio</button>
+              <button class="btn btn-sm" id="addVideo">+ Video</button>
+              <button class="btn btn-sm btn-ghost" id="openAdvanced">⚙ Advanced</button>
             </div>
           </div>
 
@@ -96,7 +99,7 @@
               <div class="tl-lane" id="laneMain"></div>
             </div>
             <div class="tl-track motion" data-track="motion">
-              <span class="tl-track-tag">MOTION</span>
+              <span class="tl-track-tag">MOTION VIDEO</span>
               <div class="tl-lane" id="laneMotion"></div>
             </div>
             <div class="tl-track audio" data-track="audio">
@@ -104,9 +107,14 @@
               <div class="tl-lane" id="laneAudio"></div>
             </div>
           </div>
-          <p class="hint">Click a shot to edit its prompt. Drag a shot to reorder; drag its right edge to change its length.</p>
 
-          <!-- Selected-segment editor -->
+          <div class="tl-controls toggles">
+            <label class="chk2"><input id="lipSync" type="checkbox" /> 🎤 Lip-sync video to voice track</label>
+            <label class="chk2"><input id="overrideAudio" type="checkbox" /> Use loaded video's own audio</label>
+          </div>
+          <p class="hint">Main track: click a shot to edit its prompt, drag to reorder, drag the right edge to change length. Audio/Motion clips can be dragged <b>anywhere</b> and resized from either edge. Load a voice clip + tick <b>Lip-sync</b> to drive the characters' mouths from that audio.</p>
+
+          <!-- Selected main-track shot editor -->
           <div id="segEditor" class="seg-editor hidden">
             <div class="seg-editor-head">
               <strong id="segEditorTitle">Shot</strong>
@@ -125,34 +133,21 @@
               <button class="btn btn-sm btn-danger" id="segDelete">Delete shot</button>
             </div>
           </div>
-        </div>
 
-        <!-- Advanced (collapsed by default) -->
-        <details class="panel advanced" id="advanced">
-          <summary>Advanced settings</summary>
-          <div class="settings-grid">
-            <label class="field"><span>Stage&nbsp;1 steps</span><input id="stage1Steps" type="number" min="1" max="60" value="20" /></label>
-            <label class="field"><span>Stage&nbsp;2 steps <small>(upscale)</small></span><input id="stage2Steps" type="number" min="1" max="30" value="4" /></label>
-            <label class="field"><span>CFG</span><input id="cfg" type="number" min="1" max="12" step="0.1" value="1" /></label>
-            <label class="field">
-              <span>Seed</span>
-              <div class="seed-row">
-                <input id="seed" type="number" min="0" value="0" />
-                <label class="chk"><input id="seedRandom" type="checkbox" checked /> random</label>
-              </div>
-            </label>
-            <label class="field"><span>Divisible by</span><input id="divisibleBy" type="number" value="32" /></label>
-            <label class="field"><span>Image compression</span><input id="imgCompression" type="number" value="18" /></label>
-            <label class="field"><span>Epsilon</span><input id="epsilon" type="number" step="0.001" value="0.001" /></label>
-            <label class="field"><span>Guide strength</span><input id="guideStrength" type="text" value="1.00" /></label>
+          <!-- Selected audio/video clip editor -->
+          <div id="clipEditor" class="seg-editor hidden">
+            <div class="seg-editor-head">
+              <strong id="clipEditorTitle">Clip</strong>
+              <button class="btn btn-sm btn-ghost" id="clipClose">✕</button>
+            </div>
+            <div class="seg-media" id="clipMediaWrap"></div>
+            <div class="seg-editor-row">
+              <span class="seg-len">Start <b id="clipStart">0</b>f · Length <b id="clipLen">0</b>f (<span id="clipSecs">0.0</span>s)</span>
+              <label class="chk2" id="clipVoiceWrap"><input id="clipVoice" type="checkbox" /> Voice track (for lip-sync)</label>
+              <button class="btn btn-sm btn-danger" id="clipDelete">Delete clip</button>
+            </div>
           </div>
-          <div class="toggles">
-            <label class="chk2"><input id="useAudio" type="checkbox" checked /> Generate audio</label>
-            <label class="chk2"><input id="useMotion" type="checkbox" checked /> Motion guidance</label>
-            <label class="chk2"><input id="inpaintAudio" type="checkbox" checked /> Inpaint audio</label>
-            <label class="chk2"><input id="bgMusicRemoval" type="checkbox" /> Remove background music</label>
-          </div>
-        </details>
+        </div>
 
         <div class="compose-actions">
           <button id="generate" class="btn btn-primary btn-lg" disabled>Generate video →</button>
@@ -197,8 +192,40 @@
     </section>
   </main>
 
+  <!-- Advanced settings modal -->
+  <div id="advancedModal" class="modal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2>Advanced settings</h2>
+        <button id="closeAdvanced" class="btn btn-ghost">✕</button>
+      </div>
+      <div class="settings-grid">
+        <label class="field"><span>Stage&nbsp;1 steps</span><input id="stage1Steps" type="number" min="1" max="60" value="20" /></label>
+        <label class="field"><span>Stage&nbsp;2 steps <small>(upscale)</small></span><input id="stage2Steps" type="number" min="1" max="30" value="4" /></label>
+        <label class="field"><span>CFG</span><input id="cfg" type="number" min="1" max="12" step="0.1" value="1" /></label>
+        <label class="field">
+          <span>Seed</span>
+          <div class="seed-row">
+            <input id="seed" type="number" min="0" value="0" />
+            <label class="chk"><input id="seedRandom" type="checkbox" checked /> random</label>
+          </div>
+        </label>
+        <label class="field"><span>Divisible by</span><input id="divisibleBy" type="number" value="32" /></label>
+        <label class="field"><span>Image compression</span><input id="imgCompression" type="number" value="18" /></label>
+        <label class="field"><span>Epsilon</span><input id="epsilon" type="number" step="0.001" value="0.001" /></label>
+        <label class="field"><span>Guide strength</span><input id="guideStrength" type="text" value="1.00" /></label>
+      </div>
+      <div class="toggles">
+        <label class="chk2"><input id="useAudio" type="checkbox" checked /> Generate audio</label>
+        <label class="chk2"><input id="useMotion" type="checkbox" checked /> Motion guidance</label>
+        <label class="chk2"><input id="inpaintAudio" type="checkbox" checked /> Inpaint audio gaps</label>
+        <label class="chk2"><input id="bgMusicRemoval" type="checkbox" /> Remove background music</label>
+      </div>
+    </div>
+  </div>
+
   <!-- Models modal -->
-  <div id="modelsModal" class="modal hidden">
+  <div id="modelsModal" class="modal">
     <div class="modal-box">
       <div class="modal-head">
         <h2>Models</h2>
@@ -210,6 +237,8 @@
   </div>
 
   <input id="imageFileInput" type="file" accept="image/*" class="hidden" />
+  <input id="audioFileInput" type="file" accept="audio/*" class="hidden" />
+  <input id="videoFileInput" type="file" accept="video/*" class="hidden" />
   <script src="/static/app.js"></script>
 </body>
 </html>
