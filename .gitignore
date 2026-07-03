@@ -1,0 +1,55 @@
+# ============================================================================
+# AIVideoBuilder .gitignore
+#
+# The vendored engine SOURCE (engine/ComfyUI + custom_nodes) IS committed so the
+# app ships self-contained: on first run only the Python packages (into
+# engine/python) and the model weights (into models/) are downloaded. Everything
+# below is either machine-specific, generated, or a huge binary — never committed.
+# NOTE: git does NOT support trailing inline "# comments" on a pattern line, so
+# every comment here is on its own line.
+# ============================================================================
+
+# --- Engine: keep the source, drop the private venv & runtime state -----------
+# 5+ GB private venv, created by first-run bootstrap:
+engine/python/
+# Per-machine setup cache / interpreter path:
+engine/.setup_state.json
+engine/python_path.txt
+
+# ComfyUI runtime dirs (regenerated) — keep the folders, ignore their contents:
+engine/ComfyUI/temp/
+engine/ComfyUI/input/*
+!engine/ComfyUI/input/.gitkeep
+engine/ComfyUI/output/*
+!engine/ComfyUI/output/.gitkeep
+engine/ComfyUI/user/*
+!engine/ComfyUI/user/.gitkeep
+
+# --- Model weights & generated output (huge binaries, downloaded on demand) ---
+models/**/*.safetensors
+models/**/*.ckpt
+models/**/*.pt
+models/**/*.pth
+models/**/*.bin
+models/**/*.gguf
+models/**/*.onnx
+output/
+
+# --- Machine-generated config -------------------------------------------------
+# Rewritten by launcher.py on every run:
+config/extra_model_paths.yaml
+# Per-machine overrides (model paths, python_exe):
+config/settings.local.json
+
+# --- Python -------------------------------------------------------------------
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# --- Misc ---------------------------------------------------------------------
+*.log
+.DS_Store
+Thumbs.db

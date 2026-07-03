@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AIVideoBuilder — LTX Director 2</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body data-phase="setup">
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">🎬</span>
+      <div>
+        <h1>AIVideoBuilder</h1>
+        <p class="tagline">LTX Director&nbsp;2 &middot; local AI video studio</p>
+      </div>
+    </div>
+
+    <!-- 3-step stepper (Compose → Generate → Result) -->
+    <nav class="stepper" id="stepper" aria-label="Progress">
+      <button class="step" data-step="setup" type="button">
+        <span class="dot">1</span><span class="lbl">Compose</span>
+      </button>
+      <span class="step-line"></span>
+      <button class="step" data-step="generating" type="button" disabled>
+        <span class="dot">2</span><span class="lbl">Generate</span>
+      </button>
+      <span class="step-line"></span>
+      <button class="step" data-step="result" type="button" disabled>
+        <span class="dot">3</span><span class="lbl">Result</span>
+      </button>
+    </nav>
+
+    <div class="top-actions">
+      <span id="modelBadge" class="badge badge-warn">Checking models…</span>
+      <button id="openModels" class="btn btn-ghost">⚙️ Models</button>
+    </div>
+  </header>
+
+  <main class="stage">
+    <!-- ============ PHASE 1 — COMPOSE ============ -->
+    <section id="phaseSetup" class="phase phase-setup">
+      <div class="compose-grid">
+        <!-- Prompt + key settings -->
+        <div class="panel">
+          <label class="field">
+            <span>Global prompt <small>(overall scene &amp; style)</small></span>
+            <textarea id="globalPrompt" rows="2" placeholder="Cinematic street photography, a young woman walking down a cobblestone street at golden hour…"></textarea>
+          </label>
+
+          <div class="key-settings">
+            <label class="field">
+              <span>Resolution</span>
+              <select id="resolution"></select>
+            </label>
+            <label class="field">
+              <span>Aspect ratio</span>
+              <select id="aspect">
+                <option value="landscape">Landscape 16:9</option>
+                <option value="portrait">Portrait 9:16</option>
+                <option value="square">Square 1:1</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Duration</span>
+              <div class="unit-input">
+                <input id="duration" type="number" min="1" max="60" step="1" value="5" />
+                <span class="unit">sec</span>
+              </div>
+            </label>
+            <label class="field">
+              <span>Frame rate</span>
+              <div class="unit-input">
+                <input id="fps" type="number" min="8" max="60" step="1" value="24" />
+                <span class="unit">fps</span>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- The timeline -->
+        <div class="panel timeline-panel">
+          <div class="timeline-head">
+            <h3>Timeline</h3>
+            <div class="timeline-info"><span id="tlTotal">0 frames</span> · <span id="tlDur">0.0s</span></div>
+            <div class="timeline-actions">
+              <button class="btn btn-sm" id="addText">+ Text shot</button>
+              <button class="btn btn-sm" id="addImage">+ Image shot</button>
+            </div>
+          </div>
+
+          <div id="tl" class="tl">
+            <div class="tl-ruler" id="tlRuler"></div>
+            <div class="tl-track" data-track="main">
+              <span class="tl-track-tag">VIDEO</span>
+              <div class="tl-lane" id="laneMain"></div>
+            </div>
+            <div class="tl-track motion" data-track="motion">
+              <span class="tl-track-tag">MOTION</span>
+              <div class="tl-lane" id="laneMotion"></div>
+            </div>
+            <div class="tl-track audio" data-track="audio">
+              <span class="tl-track-tag">AUDIO</span>
+              <div class="tl-lane" id="laneAudio"></div>
+            </div>
+          </div>
+          <p class="hint">Click a shot to edit its prompt. Drag a shot to reorder; drag its right edge to change its length.</p>
+
+          <!-- Selected-segment editor -->
+          <div id="segEditor" class="seg-editor hidden">
+            <div class="seg-editor-head">
+              <strong id="segEditorTitle">Shot</strong>
+              <button class="btn btn-sm btn-ghost" id="segClose">✕</button>
+            </div>
+            <label class="field">
+              <span>Shot prompt</span>
+              <textarea id="segPrompt" rows="3" placeholder="Describe this shot — camera, subject, action, lighting…"></textarea>
+            </label>
+            <div class="seg-editor-row">
+              <div id="segImageWrap" class="seg-image hidden">
+                <img id="segImage" alt="reference" />
+                <button class="btn btn-sm btn-ghost" id="segReplaceImg">Replace image</button>
+              </div>
+              <span class="seg-len">Length: <b id="segLen">0</b> frames (<span id="segSecs">0.0</span>s)</span>
+              <button class="btn btn-sm btn-danger" id="segDelete">Delete shot</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Advanced (collapsed by default) -->
+        <details class="panel advanced" id="advanced">
+          <summary>Advanced settings</summary>
+          <div class="settings-grid">
+            <label class="field"><span>Stage&nbsp;1 steps</span><input id="stage1Steps" type="number" min="1" max="60" value="20" /></label>
+            <label class="field"><span>Stage&nbsp;2 steps <small>(upscale)</small></span><input id="stage2Steps" type="number" min="1" max="30" value="4" /></label>
+            <label class="field"><span>CFG</span><input id="cfg" type="number" min="1" max="12" step="0.1" value="1" /></label>
+            <label class="field">
+              <span>Seed</span>
+              <div class="seed-row">
+                <input id="seed" type="number" min="0" value="0" />
+                <label class="chk"><input id="seedRandom" type="checkbox" checked /> random</label>
+              </div>
+            </label>
+            <label class="field"><span>Divisible by</span><input id="divisibleBy" type="number" value="32" /></label>
+            <label class="field"><span>Image compression</span><input id="imgCompression" type="number" value="18" /></label>
+            <label class="field"><span>Epsilon</span><input id="epsilon" type="number" step="0.001" value="0.001" /></label>
+            <label class="field"><span>Guide strength</span><input id="guideStrength" type="text" value="1.00" /></label>
+          </div>
+          <div class="toggles">
+            <label class="chk2"><input id="useAudio" type="checkbox" checked /> Generate audio</label>
+            <label class="chk2"><input id="useMotion" type="checkbox" checked /> Motion guidance</label>
+            <label class="chk2"><input id="inpaintAudio" type="checkbox" checked /> Inpaint audio</label>
+            <label class="chk2"><input id="bgMusicRemoval" type="checkbox" /> Remove background music</label>
+          </div>
+        </details>
+
+        <div class="compose-actions">
+          <button id="generate" class="btn btn-primary btn-lg" disabled>Generate video →</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ PHASE 2 — GENERATING ============ -->
+    <section id="phaseGenerating" class="phase phase-generating">
+      <div class="gen-view">
+        <div class="gen-preview">
+          <img id="preview" class="preview" alt="live preview" />
+          <div id="genNoPreview" class="gen-nopreview">
+            <div class="spinner"></div>
+            <p id="genStageLabel">Starting…</p>
+          </div>
+        </div>
+        <div class="gen-hud">
+          <div class="gen-stage" id="stageLabel">Starting…</div>
+          <div class="bar"><div class="bar-fill" id="stageBar"></div></div>
+          <div class="bar bar-thin"><div class="bar-fill bar-step" id="stepBar"></div></div>
+          <div class="gen-hud-foot">
+            <span class="step-text" id="stepText"></span>
+            <button id="interrupt" class="btn btn-danger btn-sm">Stop</button>
+          </div>
+        </div>
+        <div id="genError" class="gen-error hidden"></div>
+      </div>
+    </section>
+
+    <!-- ============ PHASE 3 — RESULT ============ -->
+    <section id="phaseResult" class="phase phase-result">
+      <div class="result-view">
+        <video id="video" class="video" controls playsinline></video>
+        <div class="result-actions">
+          <a id="downloadVideo" class="btn btn-ghost" download>⬇ Download</a>
+          <button id="editAgain" class="btn btn-ghost">← Back to editor</button>
+          <button id="newVideo" class="btn btn-primary">＋ New video</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Models modal -->
+  <div id="modelsModal" class="modal hidden">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2>Models</h2>
+        <button id="closeModels" class="btn btn-ghost">✕</button>
+      </div>
+      <p class="hint">Download required models, or point at files you already have (e.g. on an external drive). Edit <code>config/models_manifest.json</code> to change URLs/versions.</p>
+      <div id="modelList" class="model-list"></div>
+    </div>
+  </div>
+
+  <input id="imageFileInput" type="file" accept="image/*" class="hidden" />
+  <script src="/static/app.js"></script>
+</body>
+</html>

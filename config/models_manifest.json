@@ -1,0 +1,82 @@
+{
+  "_comment": "User-editable model manifest. Edit url / filename / version / sha256 as needed BEFORE launching, or use the app's 'Locate existing file' button to point at models you already downloaded. A good curated list of LTX-2 download links: https://github.com/wildminder/awesome-ltx2",
+  "models": [
+    {
+      "id": "unet",
+      "name": "LTX-2.3 22B Distilled Transformer (fp8)",
+      "dest_subfolder": "diffusion_models",
+      "filename": "ltx-2.3-22b-distilled-1.1_transformer_only_fp8_scaled.safetensors",
+      "url": "",
+      "version": "1.1",
+      "sha256": "",
+      "required": true,
+      "note": "Main video diffusion model. See awesome-ltx2 for the current download link."
+    },
+    {
+      "id": "clip_text_encoder",
+      "name": "Gemma 3 12B IT Text Encoder (fp4 mixed)",
+      "dest_subfolder": "text_encoders",
+      "filename": "gemma_3_12B_it_fp4_mixed.safetensors",
+      "url": "",
+      "version": "1.0",
+      "sha256": "",
+      "required": true,
+      "note": "Primary text encoder used by DualCLIPLoader."
+    },
+    {
+      "id": "clip_text_projection",
+      "name": "LTX-2.3 Text Projection (bf16)",
+      "dest_subfolder": "text_encoders",
+      "filename": "ltx-2.3_text_projection_bf16.safetensors",
+      "url": "",
+      "version": "2.3",
+      "sha256": "",
+      "required": true,
+      "note": "Second slot of DualCLIPLoader (text projection)."
+    },
+    {
+      "id": "video_vae",
+      "name": "LTX-2.3 Video VAE (bf16)",
+      "dest_subfolder": "vae",
+      "filename": "LTX23_video_vae_bf16.safetensors",
+      "url": "",
+      "version": "2.3",
+      "sha256": "",
+      "required": true,
+      "note": "Video VAE (decode + upsampler)."
+    },
+    {
+      "id": "audio_vae",
+      "name": "LTX-2.3 Audio VAE (bf16)",
+      "dest_subfolder": "vae",
+      "filename": "LTX23_audio_vae_bf16.safetensors",
+      "url": "",
+      "version": "2.3",
+      "sha256": "",
+      "required": true,
+      "note": "Audio VAE (audio decode)."
+    },
+    {
+      "id": "tiny_vae",
+      "name": "LTX-2.3 Tiny VAE (taeltx2_3)",
+      "dest_subfolder": "vae",
+      "filename": "taeltx2_3.safetensors",
+      "url": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/taeltx2_3.safetensors",
+      "version": "2.3",
+      "sha256": "",
+      "required": true,
+      "note": "Tiny VAE used for the live preview (ModelPreviewOverrideKJ)."
+    },
+    {
+      "id": "spatial_upscaler",
+      "name": "LTX-2.3 Spatial Upscaler x2 (v1.1)",
+      "dest_subfolder": "latent_upscale_models",
+      "filename": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+      "url": "",
+      "version": "1.1",
+      "sha256": "",
+      "required": true,
+      "note": "Stage-2 latent spatial upscaler. Latest v1.1 on huggingface.co/Lightricks/LTX-2.3."
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "ComfyUI": {
+    "source": "https://github.com/comfyanonymous/ComfyUI",
+    "commit": "1e04ced089758f1855b84abad739be503c7dc9cd"
+  },
+  "WhatDreamsCost-ComfyUI": {
+    "source": "https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI",
+    "commit": "0dfa657a8676f2c56ecc84b735402dcfd6c1eae5",
+    "tag": "v2.0.2"
+  },
+  "comfyui-kjnodes": {
+    "source": "https://github.com/kijai/ComfyUI-KJNodes",
+    "commit": "eca4757d653654deb5744edf16a862f352800fdc"
+  },
+  "cinematic_audio_separation": {
+    "source": "vendored from a local ComfyUI install; no known public git remote",
+    "commit": null
+  }
+}

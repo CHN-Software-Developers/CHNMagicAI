@@ -1,0 +1,96 @@
+{
+  "comfy_host": "127.0.0.1",
+  "comfy_port": 8199,
+  "app_host": "127.0.0.1",
+  "app_port": 8188,
+  "engine_dir": "engine/ComfyUI",
+  "models_dir": "models",
+  "output_dir": "output",
+  "python_exe": "",
+  "open_browser": true,
+  "comfy_startup_timeout_seconds": 300,
+  "setup": {
+    "auto": true,
+    "base_python": "",
+    "auto_install_torch": true,
+    "torch_index_url": "https://download.pytorch.org/whl/cu128",
+    "pip_trusted_hosts": [
+      "pypi.org",
+      "files.pythonhosted.org",
+      "pypi.python.org",
+      "download.pytorch.org"
+    ],
+    "local_comfy_source": "",
+    "comfy_repo": "https://github.com/comfyanonymous/ComfyUI",
+    "comfy_commit": "1e04ced089758f1855b84abad739be503c7dc9cd"
+  },
+  "models": {
+    "unet": "ltx-2.3-22b-distilled-1.1_transformer_only_fp8_scaled.safetensors",
+    "clip_text_encoder": "gemma_3_12B_it_fp4_mixed.safetensors",
+    "clip_text_projection": "ltx-2.3_text_projection_bf16.safetensors",
+    "video_vae": "LTX23_video_vae_bf16.safetensors",
+    "audio_vae": "LTX23_audio_vae_bf16.safetensors",
+    "tiny_vae": "taeltx2_3.safetensors",
+    "spatial_upscaler": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+  },
+  "model_overrides": {},
+  "resolution_presets": {
+    "480p": {
+      "landscape": [
+        854,
+        480
+      ],
+      "portrait": [
+        480,
+        854
+      ],
+      "square": [
+        640,
+        640
+      ]
+    },
+    "720p": {
+      "landscape": [
+        1280,
+        720
+      ],
+      "portrait": [
+        720,
+        1280
+      ],
+      "square": [
+        960,
+        960
+      ]
+    },
+    "1080p": {
+      "landscape": [
+        1920,
+        1080
+      ],
+      "portrait": [
+        1080,
+        1920
+      ],
+      "square": [
+        1440,
+        1440
+      ]
+    }
+  },
+  "defaults": {
+    "resolution": "720p",
+    "aspect": "landscape",
+    "divisible_by": 32,
+    "frame_rate": 24,
+    "duration_seconds": 5,
+    "display_mode": "seconds",
+    "stage1_steps": 20,
+    "stage2_steps": 4,
+    "cfg": 1,
+    "img_compression": 18,
+    "seed": 0,
+    "seed_mode": "randomize",
+    "enable_bg_music_removal": false
+  }
+}
