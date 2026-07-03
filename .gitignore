@@ -34,6 +34,16 @@ models/**/*.bin
 models/**/*.gguf
 models/**/*.onnx
 output/
+# A few nodes read weights straight from the engine's own models dir (e.g. BandIt Plus for
+# music removal). Ignore those weights too; the small .yaml configs beside them stay tracked.
+engine/ComfyUI/models/**/*.safetensors
+engine/ComfyUI/models/**/*.ckpt
+engine/ComfyUI/models/**/*.chpt
+engine/ComfyUI/models/**/*.pt
+engine/ComfyUI/models/**/*.pth
+engine/ComfyUI/models/**/*.bin
+engine/ComfyUI/models/**/*.gguf
+engine/ComfyUI/models/**/*.onnx
 
 # --- Machine-generated config -------------------------------------------------
 # Rewritten by launcher.py on every run:

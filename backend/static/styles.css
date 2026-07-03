@@ -236,7 +236,7 @@ textarea { resize: vertical; }
 .gen-preview .preview { width: 100%; height: 100%; object-fit: contain; }
 .gen-preview .preview:not([src]), .gen-preview .preview[src=""] { display: none; }
 .gen-nopreview { position: absolute; inset: 0; display: grid; place-items: center; gap: 14px; grid-auto-flow: row; text-align: center; color: var(--muted); }
-.gen-preview .preview[src]:not([src=""]) ~ .gen-nopreview { display: none; }
+.gen-preview.has-preview .gen-nopreview { display: none; }
 .spinner {
   width: 48px; height: 48px; border-radius: 50%;
   border: 4px solid rgba(255,255,255,.12); border-top-color: var(--accent);

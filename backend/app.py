@@ -131,7 +131,16 @@ async def _consume(queue):
         msg = item["data"]
         mtype = msg.get("type")
         data = msg.get("data", {})
-        if mtype == "progress":
+        if mtype == "kj_preview_override":
+            # ModelPreviewOverrideKJ streams its live per-step preview as a custom JSON message
+            # (NOT the binary event-1 preview): a base64 frame + its mime (image/jpeg, image/webp,
+            # or video/mp4 for the animated multi-frame preview). Relay it to the UI as a data URL.
+            img = data.get("image")
+            if img:
+                mime = data.get("mime") or "image/jpeg"
+                await hub.broadcast({"type": "preview", "mime": mime,
+                                     "image": f"data:{mime};base64,{img}"})
+        elif mtype == "progress":
             await hub.broadcast({"type": "progress", "value": data.get("value"),
                                  "max": data.get("max")})
         elif mtype == "executing":

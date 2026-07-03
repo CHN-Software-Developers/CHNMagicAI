@@ -4,8 +4,12 @@ Per GPL-3.0 §5(a), every modification to a vendored file (under `engine/`) is r
 date and description. Our own application code (`backend/`, `config/`, `workflows/`, `scripts/`)
 is original and not listed here.
 
-_No vendored **source** files have been modified._ (Vendored code under `engine/` is kept pristine —
-the files that remain are byte-for-byte upstream.)
+Vendored code under `engine/` is kept pristine — the files that remain are byte-for-byte upstream,
+**with one inherited exception**: the MSST framework embedded in the `cinematic_audio_separation`
+node arrived with `msst/models/bandit/core/__init__.py` already trimmed to inference-only by the
+node's author (training-only imports `asteroid` / `pedalboard` / `pyloudnorm` /
+`torch_audiomentations` removed, none of which the inference path uses). The unmodified original is
+preserved beside it as `__init__.py.orig_bak`. MSST is MIT-licensed. We made no further edits.
 
 ## Files removed from the vendored trees (2026-07-03)
 
@@ -28,6 +32,18 @@ commit (see `THIRD_PARTY_NOTICES.md`).
 ## Extra dependencies installed by our bootstrap (not modifications)
 
 The `cinematic_audio_separation` node ships no `requirements.txt`; our `backend/bootstrap.py`
-installs its one module-level dependency `soundfile` so it loads. This is an install-time addition,
-not a source modification.
+installs the packages its code imports so it loads and runs. These are install-time additions, not
+source modifications:
+
+- `soundfile` — imported by the node at module load.
+- `librosa`, `omegaconf`, `pytorch-lightning`, `spafe`, `ml-collections` — top-level imports of the
+  embedded MSST BandIt Plus inference path (run in a subprocess for the "Remove background music"
+  option). All are permissive-licensed (see `THIRD_PARTY_NOTICES.md`).
+
+## Model config added (not a modification, 2026-07-03)
+
+`engine/ComfyUI/models/audio/bandit/config_dnr_bandit_bsrnn_multi_mus64.yaml` (the BandIt Plus model
+config, ~1.7 KB) is committed so the music-removal node has its config in place. The matching
+checkpoint (`model_bandit_plus_dnr_sdr_11.47.chpt`, ~142 MB) is **not** committed — it is
+downloaded/located by the user (git-ignored). Neither is a change to vendored source.
 

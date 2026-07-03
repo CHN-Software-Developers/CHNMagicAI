@@ -342,11 +342,37 @@ function startGenerating() {
   state.hasResult = false;
   $("genError").classList.add("hidden");
   $("preview").removeAttribute("src");
+  const pv = $("previewVideo");
+  pv.removeAttribute("src");
+  pv.classList.add("hidden");
+  $("preview").classList.remove("hidden");
+  $("genPreview").classList.remove("has-preview");
   $("stageBar").style.width = "0%";
   $("stepBar").style.width = "0%";
   $("stepText").textContent = "";
   setGenStage("Starting…", 0);
   setPhase("generating");
+}
+
+// Render a live per-step preview frame. ModelPreviewOverrideKJ sends either a still
+// (image/jpeg, image/webp) or an animated clip (video/mp4) depending on preview_frames/NVENC —
+// an <img> can't play mp4, so route video mimes to the <video> element.
+function showPreview(dataUrl, mime) {
+  const img = $("preview");
+  const vid = $("previewVideo");
+  if (mime && mime.indexOf("video/") === 0) {
+    img.removeAttribute("src");
+    img.classList.add("hidden");
+    vid.src = dataUrl;
+    vid.classList.remove("hidden");
+    vid.play && vid.play().catch(() => {});
+  } else {
+    vid.removeAttribute("src");
+    vid.classList.add("hidden");
+    img.classList.remove("hidden");
+    img.src = dataUrl;
+  }
+  $("genPreview").classList.add("has-preview");
 }
 
 function setGenStage(label, overallPct) {
@@ -389,7 +415,7 @@ function handleWS(m) {
       }
       break;
     case "preview":
-      $("preview").src = m.image;
+      showPreview(m.image, m.mime);
       break;
     case "complete":
       onComplete(m.video_url);

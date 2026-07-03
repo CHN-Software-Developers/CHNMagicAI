@@ -36,9 +36,13 @@ CUSTOM_NODES = {
     "cinematic_audio_separation": "",  # copied from local install; no known public git
 }
 TORCH_PKGS = ["torch", "torchsde", "torchvision", "torchaudio"]
-# Deps required by vendored custom nodes that ship no requirements.txt
-# (cinematic_audio_separation imports soundfile at module load).
-EXTRA_NODE_DEPS = ["soundfile"]
+# Deps required by vendored custom nodes that ship no requirements.txt.
+# cinematic_audio_separation imports soundfile at module load, and its BandIt Plus
+# inference subprocess (msst framework) top-level-imports librosa / omegaconf /
+# pytorch_lightning / spafe / ml_collections. These are NOT ComfyUI-core deps, so they
+# must be installed explicitly or the "Remove background music" option fails at runtime.
+EXTRA_NODE_DEPS = ["soundfile", "librosa", "omegaconf", "pytorch-lightning",
+                   "spafe", "ml-collections"]
 # Top-level names to skip when copying a local ComfyUI (models/outputs/other people's nodes/etc.)
 COPY_IGNORE = shutil.ignore_patterns(
     "models", "output", "input", "temp", "user", "custom_nodes",
@@ -181,7 +185,9 @@ def _load_state():
 # Representative modules spanning torch, ComfyUI core, node deps and our backend. If all import,
 # the env is already provisioned (e.g. user ran vendor_engine.py) and we skip pip entirely.
 _PROBE_MODULES = ["torch", "sqlalchemy", "filelock", "blake3", "PIL", "tqdm", "av", "aiohttp",
-                  "fastapi", "uvicorn", "numpy", "transformers", "safetensors", "soundfile"]
+                  "fastapi", "uvicorn", "numpy", "transformers", "safetensors", "soundfile",
+                  # cinematic_audio_separation (BandIt Plus) inference deps:
+                  "librosa", "omegaconf", "pytorch_lightning", "spafe", "ml_collections"]
 
 
 def _all_present(py):

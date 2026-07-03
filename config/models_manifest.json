@@ -77,6 +77,18 @@
       "sha256": "",
       "required": true,
       "note": "Stage-2 latent spatial upscaler. Latest v1.1 on huggingface.co/Lightricks/LTX-2.3."
+    },
+    {
+      "id": "bandit_music_removal",
+      "name": "BandIt Plus — Cinematic Audio Separation (DnR)",
+      "dest_root": "engine_models",
+      "dest_subfolder": "audio/bandit",
+      "filename": "model_bandit_plus_dnr_sdr_11.47.chpt",
+      "url": "",
+      "version": "sdr_11.47",
+      "sha256": "",
+      "required": false,
+      "note": "Optional (~142 MB). Only needed for the 'Remove background music' option. Splits audio into speech/music/effects and drops the music (keeps dialogue + SFX). BandIt Plus checkpoint from ZFTurbo's Music-Source-Separation-Training. No official single-file URL — use 'Locate existing file', or fetch model_bandit_plus_dnr_sdr_11.47.chpt via the MSST model list (github.com/ZFTurbo/Music-Source-Separation-Training)."
     }
   ]
 }

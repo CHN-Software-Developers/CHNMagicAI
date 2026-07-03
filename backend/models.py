@@ -13,6 +13,13 @@ import aiohttp
 CONFIG_DIR = os.path.join(os.path.dirname(__file__), "..", "config")
 MANIFEST_PATH = os.path.join(CONFIG_DIR, "models_manifest.json")
 
+# ComfyUI's own models dir (engine/ComfyUI/models). A few nodes read a model straight from
+# folder_paths.models_dir instead of an extra-model-paths category — e.g. cinematic_audio_
+# separation loads BandIt Plus from <models_dir>/audio/bandit. Such manifest entries set
+# "dest_root": "engine_models" so we place the file where the node actually looks.
+ENGINE_MODELS_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "engine", "ComfyUI", "models"))
+
 
 def load_manifest():
     import json
@@ -21,7 +28,8 @@ def load_manifest():
 
 
 def _dest_path(models_dir, model):
-    return os.path.join(models_dir, model["dest_subfolder"], model["filename"])
+    base = ENGINE_MODELS_DIR if model.get("dest_root") == "engine_models" else models_dir
+    return os.path.join(base, model["dest_subfolder"], model["filename"])
 
 
 def model_status(models_dir, settings):

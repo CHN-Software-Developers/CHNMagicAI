@@ -57,6 +57,15 @@ The pipeline uses **LTX-2.3** model files. In the app's **Models** panel:
 
 The **Generate** button unlocks once all required models resolve.
 
+### Optional: "Remove background music"
+The editor has a **Remove background music** toggle. It runs a post-pass that splits the generated
+audio into speech / music / effects and keeps everything **except** the music (dialogue and SFX are
+preserved). It needs one extra, **optional** model — **BandIt Plus** (`bandit_music_removal` in the
+manifest, ~142 MB). Download or **Locate…** it in the Models panel; it is placed under
+`engine/ComfyUI/models/audio/bandit/`. The Python packages this feature needs (`librosa`,
+`omegaconf`, `pytorch-lightning`, `spafe`, `ml-collections`) are installed automatically at first-run
+setup. If you never enable the toggle, the model is not required and generation is unaffected.
+
 ---
 
 ## Verified end-to-end (on this machine)

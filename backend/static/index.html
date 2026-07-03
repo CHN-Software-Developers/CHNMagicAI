@@ -163,8 +163,9 @@
     <!-- ============ PHASE 2 — GENERATING ============ -->
     <section id="phaseGenerating" class="phase phase-generating">
       <div class="gen-view">
-        <div class="gen-preview">
+        <div class="gen-preview" id="genPreview">
           <img id="preview" class="preview" alt="live preview" />
+          <video id="previewVideo" class="preview hidden" autoplay loop muted playsinline></video>
           <div id="genNoPreview" class="gen-nopreview">
             <div class="spinner"></div>
             <p id="genStageLabel">Starting…</p>

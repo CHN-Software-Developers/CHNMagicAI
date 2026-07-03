@@ -13,7 +13,22 @@
     "commit": "eca4757d653654deb5744edf16a862f352800fdc"
   },
   "cinematic_audio_separation": {
-    "source": "vendored from a local ComfyUI install; no known public git remote",
-    "commit": null
+    "source": "custom-built node; vendored from a local ComfyUI install; no known public git remote",
+    "commit": null,
+    "embeds": {
+      "msst": {
+        "name": "Music-Source-Separation-Training (ZFTurbo)",
+        "source": "https://github.com/ZFTurbo/Music-Source-Separation-Training",
+        "license": "MIT",
+        "path": "msst",
+        "modified": "models/bandit/core/__init__.py trimmed to inference-only by the node author; original at __init__.py.orig_bak"
+      }
+    },
+    "model": {
+      "name": "BandIt Plus (DnR) — model_bandit_plus_dnr_sdr_11.47.chpt",
+      "source": "ZFTurbo Music-Source-Separation-Training model list",
+      "committed": false,
+      "note": "~142 MB; downloaded/located by the user into engine/ComfyUI/models/audio/bandit/"
+    }
   }
 }
