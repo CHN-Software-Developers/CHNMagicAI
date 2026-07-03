@@ -8,20 +8,27 @@ const MIN_LEN = 6; // frames (matches LTX Director MIN_SEGMENT_LENGTH)
 const PHASES = ["setup", "generating", "result"];
 
 const STAGE_ORDER = [
-  "Loading models", "Preparing timeline", "Encoding guides",
-  "Generating (stage 1)", "Upscaling latents", "Upscaling (stage 2)",
-  "Decoding audio", "Decoding video", "Encoding video",
-  "Post-processing audio", "Saving video",
+  "Loading models",
+  "Preparing timeline",
+  "Encoding guides",
+  "Generating (stage 1)",
+  "Upscaling latents",
+  "Upscaling (stage 2)",
+  "Decoding audio",
+  "Decoding video",
+  "Encoding video",
+  "Post-processing audio",
+  "Saving video",
 ];
 
 const state = {
   config: null,
-  segments: [],       // main track: [{id,type,prompt,length,imageFile,imageB64,isEndFrame}]
-  audioClips: [],     // free: [{id,kind:'audio',file,url,name,start,length,trimStart,voice}]
-  videoClips: [],     // free: [{id,kind:'video',file,url,name,start,length,trimStart}]  (motion)
+  segments: [], // main track: [{id,type,prompt,length,imageFile,imageB64,isEndFrame}]
+  audioClips: [], // free: [{id,kind:'audio',file,url,name,start,length,trimStart,voice}]
+  videoClips: [], // free: [{id,kind:'video',file,url,name,start,length,trimStart}]  (motion)
   models: [],
-  selectedId: null,       // selected main shot
-  selectedClipId: null,   // selected audio/video clip
+  selectedId: null, // selected main shot
+  selectedClipId: null, // selected audio/video clip
   hasResult: false,
   generating: false,
 };
@@ -36,7 +43,9 @@ async function init() {
   applyDefaults();
   if (state.segments.length === 0) {
     state.segments.push(mkSeg("text", "A cinematic establishing shot."));
-    state.segments.push(mkSeg("text", "The camera slowly pushes in, revealing detail."));
+    state.segments.push(
+      mkSeg("text", "The camera slowly pushes in, revealing detail."),
+    );
     fitToTotal();
   }
   refreshModelBadge();
@@ -47,18 +56,28 @@ async function init() {
 }
 
 function mkSeg(type, prompt = "", extra = {}) {
-  return { id: newId(), type, prompt, length: 48,
-           imageFile: extra.imageFile || null, imageB64: extra.imageB64 || null, isEndFrame: false };
+  return {
+    id: newId(),
+    type,
+    prompt,
+    length: 48,
+    imageFile: extra.imageFile || null,
+    imageB64: extra.imageB64 || null,
+    isEndFrame: false,
+  };
 }
 
 function populateResolution() {
   const sel = $("resolution");
   sel.innerHTML = "";
-  Object.keys(state.config.resolution_presets || { "720p": {} }).forEach((k) => {
-    const o = document.createElement("option");
-    o.value = k; o.textContent = k;
-    sel.appendChild(o);
-  });
+  Object.keys(state.config.resolution_presets || { "720p": {} }).forEach(
+    (k) => {
+      const o = document.createElement("option");
+      o.value = k;
+      o.textContent = k;
+      sel.appendChild(o);
+    },
+  );
 }
 
 function applyDefaults() {
@@ -85,7 +104,8 @@ function setPhase(p) {
     el.classList.toggle("active", el.dataset.step === p);
     el.classList.toggle("done", idx < cur);
     if (el.dataset.step === "setup") el.disabled = false;
-    else if (el.dataset.step === "generating") el.disabled = !(state.generating || p === "generating");
+    else if (el.dataset.step === "generating")
+      el.disabled = !(state.generating || p === "generating");
     else if (el.dataset.step === "result") el.disabled = !state.hasResult;
   });
 }
@@ -110,9 +130,15 @@ function fitToTotal() {
   if (n === 0) return;
   const total = frames();
   let sum = state.segments.reduce((a, s) => a + (s.length || 0), 0);
-  if (sum <= 0) { const per = Math.floor(total / n); state.segments.forEach((s) => (s.length = per)); sum = per * n; }
+  if (sum <= 0) {
+    const per = Math.floor(total / n);
+    state.segments.forEach((s) => (s.length = per));
+    sum = per * n;
+  }
   const scale = total / sum;
-  state.segments.forEach((s) => (s.length = Math.max(MIN_LEN, Math.round(s.length * scale))));
+  state.segments.forEach(
+    (s) => (s.length = Math.max(MIN_LEN, Math.round(s.length * scale))),
+  );
   let ns = state.segments.reduce((a, s) => a + s.length, 0);
   const last = state.segments[n - 1];
   last.length = Math.max(MIN_LEN, last.length + (total - ns));
@@ -138,7 +164,10 @@ function addSegment(type, prompt = "", extra = {}) {
 
 function removeSegment(id) {
   state.segments = state.segments.filter((s) => s.id !== id);
-  if (state.selectedId === id) { state.selectedId = null; $("segEditor").classList.add("hidden"); }
+  if (state.selectedId === id) {
+    state.selectedId = null;
+    $("segEditor").classList.add("hidden");
+  }
   if (state.segments.length) fitToTotal();
   renderTimeline();
 }
@@ -158,7 +187,9 @@ function renderRuler() {
   const fps = parseFloat($("fps").value) || 24;
   const totalSecs = total / fps;
   let stepSec = 1;
-  [1, 2, 5, 10, 15, 30, 60].some((c) => (totalSecs / c <= 12 ? ((stepSec = c), true) : false));
+  [1, 2, 5, 10, 15, 30, 60].some((c) =>
+    totalSecs / c <= 12 ? ((stepSec = c), true) : false,
+  );
   for (let sec = 0; sec <= totalSecs + 0.001; sec += stepSec) {
     const f = sec * fps;
     const tick = document.createElement("div");
@@ -175,22 +206,31 @@ function renderMain() {
   const total = totalFrames();
   let cursor = 0;
   state.segments.forEach((s, idx) => {
-    const start = cursor; cursor += s.length;
+    const start = cursor;
+    cursor += s.length;
     const block = document.createElement("div");
-    block.className = "tl-block" + (s.type === "image" ? " image" : "") + (s.id === state.selectedId ? " selected" : "");
+    block.className =
+      "tl-block" +
+      (s.type === "image" ? " image" : "") +
+      (s.id === state.selectedId ? " selected" : "");
     block.dataset.id = s.id;
     block.style.left = `${(start / total) * 100}%`;
     block.style.width = `${(s.length / total) * 100}%`;
     const kind = s.type === "image" ? "IMG" : "TEXT";
     block.innerHTML =
-      (s.imageB64 ? `<div class="b-thumb" style="background-image:url('${s.imageB64}')"></div>` : "") +
+      (s.imageB64
+        ? `<div class="b-thumb" style="background-image:url('${s.imageB64}')"></div>`
+        : "") +
       `<div class="b-head"><span class="b-kind">${kind}</span></div>` +
       `<div class="b-prompt">${escapeHtml(s.prompt || "(no prompt)")}</div>` +
-      (idx < state.segments.length - 1 ? `<div class="b-handle" data-handle="1"></div>` : "");
+      (idx < state.segments.length - 1
+        ? `<div class="b-handle" data-handle="1"></div>`
+        : "");
     lane.appendChild(block);
   });
   if (state.segments.length === 0) {
-    const e = document.createElement("div"); e.className = "tl-empty";
+    const e = document.createElement("div");
+    e.className = "tl-empty";
     e.textContent = "Add a text or image shot to begin.";
     lane.appendChild(e);
   }
@@ -199,10 +239,22 @@ function renderMain() {
 
 /* Free-placement lanes: motion (video) + audio. */
 function renderClips() {
-  renderLane("video", state.videoClips, $("laneMotion"), $("useMotion").checked,
-             "Auto motion guidance (follows your shots)", "Motion off");
-  renderLane("audio", state.audioClips, $("laneAudio"), $("useAudio").checked,
-             "Auto audio generated for the full clip", "Audio off");
+  renderLane(
+    "video",
+    state.videoClips,
+    $("laneMotion"),
+    $("useMotion").checked,
+    "Auto motion guidance (follows your shots)",
+    "Motion off",
+  );
+  renderLane(
+    "audio",
+    state.audioClips,
+    $("laneAudio"),
+    $("useAudio").checked,
+    "Auto audio generated for the full clip",
+    "Audio off",
+  );
 }
 
 function renderLane(kind, clips, lane, autoOn, autoText, offText) {
@@ -217,13 +269,15 @@ function renderLane(kind, clips, lane, autoOn, autoText, offText) {
   const lip = kind === "audio" && $("lipSync").checked;
   clips.forEach((c) => {
     const el = document.createElement("div");
-    el.className = `tl-clip ${kind}` +
+    el.className =
+      `tl-clip ${kind}` +
       (c.id === state.selectedClipId ? " selected" : "") +
       (kind === "audio" && c.voice ? " voice" : "");
     el.dataset.id = c.id;
     el.style.left = `${(Math.max(0, c.start) / total) * 100}%`;
     el.style.width = `${(Math.max(MIN_LEN, c.length) / total) * 100}%`;
-    const kindLabel = kind === "audio" ? (c.voice ? "VOICE" : "AUDIO") : "VIDEO";
+    const kindLabel =
+      kind === "audio" ? (c.voice ? "VOICE" : "AUDIO") : "VIDEO";
     el.innerHTML =
       `<span class="c-kind">${kindLabel}</span>` +
       `<div class="c-handle left" data-handle="left"></div>` +
@@ -233,7 +287,8 @@ function renderLane(kind, clips, lane, autoOn, autoText, offText) {
   });
   if (lip && clips.some((c) => c.voice)) {
     const b = document.createElement("div");
-    b.className = "tl-lipbadge"; b.textContent = "LIP-SYNC";
+    b.className = "tl-lipbadge";
+    b.textContent = "LIP-SYNC";
     lane.appendChild(b);
   }
   bindClipPointer(lane, kind);
@@ -258,7 +313,8 @@ function onBlockDown(e, block, lane) {
 
   if (isHandle) {
     const i = idxOf(id);
-    const l0 = state.segments[i].length, r0 = state.segments[i + 1].length;
+    const l0 = state.segments[i].length,
+      r0 = state.segments[i + 1].length;
     const onMove = (ev) => {
       const dxFrames = ((ev.clientX - startX) / laneRect.width) * total;
       let delta = Math.round(dxFrames);
@@ -268,7 +324,10 @@ function onBlockDown(e, block, lane) {
       renderTimeline();
       if (state.selectedId) refreshSegEditorLen();
     };
-    const onUp = () => { document.removeEventListener("pointermove", onMove); document.removeEventListener("pointerup", onUp); };
+    const onUp = () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+    };
     document.addEventListener("pointermove", onMove);
     document.addEventListener("pointerup", onUp);
     return;
@@ -279,10 +338,14 @@ function onBlockDown(e, block, lane) {
     if (Math.abs(ev.clientX - startX) > 4) moved = true;
     if (!moved) return;
     const ptrFrame = ((ev.clientX - laneRect.left) / laneRect.width) * total;
-    let acc = 0, target = state.segments.length - 1;
+    let acc = 0,
+      target = state.segments.length - 1;
     for (let k = 0; k < state.segments.length; k++) {
       acc += state.segments[k].length;
-      if (ptrFrame < acc - state.segments[k].length / 2) { target = k; break; }
+      if (ptrFrame < acc - state.segments[k].length / 2) {
+        target = k;
+        break;
+      }
       target = k;
     }
     const cur = idxOf(id);
@@ -303,8 +366,15 @@ function onBlockDown(e, block, lane) {
 }
 
 /* ------------------------------- clip (audio/video) interaction ------------------------------- */
-function clipsOf(kind) { return kind === "audio" ? state.audioClips : state.videoClips; }
-function findClip(id) { return state.audioClips.find((c) => c.id === id) || state.videoClips.find((c) => c.id === id); }
+function clipsOf(kind) {
+  return kind === "audio" ? state.audioClips : state.videoClips;
+}
+function findClip(id) {
+  return (
+    state.audioClips.find((c) => c.id === id) ||
+    state.videoClips.find((c) => c.id === id)
+  );
+}
 
 function bindClipPointer(lane, kind) {
   lane.querySelectorAll(".tl-clip").forEach((el) => {
@@ -356,18 +426,22 @@ function onClipDown(e, el, lane, kind) {
 
 /* ------------------------------- main-shot editor ------------------------------- */
 function selectSegment(id) {
-  state.selectedClipId = null; $("clipEditor").classList.add("hidden");
+  state.selectedClipId = null;
+  $("clipEditor").classList.add("hidden");
   state.selectedId = id;
   const s = state.segments.find((x) => x.id === id);
   if (!s) return;
   renderTimeline();
   const ed = $("segEditor");
   ed.classList.remove("hidden");
-  $("segEditorTitle").textContent = s.type === "image" ? "Image shot" : "Text shot";
+  $("segEditorTitle").textContent =
+    s.type === "image" ? "Image shot" : "Text shot";
   $("segPrompt").value = s.prompt || "";
   const wrap = $("segImageWrap");
-  if (s.type === "image" && s.imageB64) { wrap.classList.remove("hidden"); $("segImage").src = s.imageB64; }
-  else wrap.classList.add("hidden");
+  if (s.type === "image" && s.imageB64) {
+    wrap.classList.remove("hidden");
+    $("segImage").src = s.imageB64;
+  } else wrap.classList.add("hidden");
   refreshSegEditorLen();
 }
 
@@ -381,20 +455,29 @@ function refreshSegEditorLen() {
 
 /* ------------------------------- clip editor ------------------------------- */
 function selectClip(id) {
-  state.selectedId = null; $("segEditor").classList.add("hidden");
+  state.selectedId = null;
+  $("segEditor").classList.add("hidden");
   state.selectedClipId = id;
   const c = findClip(id);
   if (!c) return;
   renderTimeline();
   const ed = $("clipEditor");
   ed.classList.remove("hidden");
-  $("clipEditorTitle").textContent = c.kind === "audio" ? (c.voice ? "Voice clip" : "Audio clip") : "Motion video clip";
-  $("clipMediaWrap").innerHTML = c.kind === "audio"
-    ? `<audio controls src="${c.url}"></audio>`
-    : `<video controls muted playsinline src="${c.url}"></video>`;
+  $("clipEditorTitle").textContent =
+    c.kind === "audio"
+      ? c.voice
+        ? "Voice clip"
+        : "Audio clip"
+      : "Motion video clip";
+  $("clipMediaWrap").innerHTML =
+    c.kind === "audio"
+      ? `<audio controls src="${c.url}"></audio>`
+      : `<video controls muted playsinline src="${c.url}"></video>`;
   const vw = $("clipVoiceWrap");
-  if (c.kind === "audio") { vw.classList.remove("hidden"); $("clipVoice").checked = !!c.voice; }
-  else vw.classList.add("hidden");
+  if (c.kind === "audio") {
+    vw.classList.remove("hidden");
+    $("clipVoice").checked = !!c.voice;
+  } else vw.classList.add("hidden");
   refreshClipEditor();
 }
 
@@ -410,7 +493,10 @@ function refreshClipEditor() {
 function removeClip(id) {
   state.audioClips = state.audioClips.filter((c) => c.id !== id);
   state.videoClips = state.videoClips.filter((c) => c.id !== id);
-  if (state.selectedClipId === id) { state.selectedClipId = null; $("clipEditor").classList.add("hidden"); }
+  if (state.selectedClipId === id) {
+    state.selectedClipId = null;
+    $("clipEditor").classList.add("hidden");
+  }
   renderTimeline();
 }
 
@@ -422,7 +508,10 @@ function uploadMedia(kind, cb) {
     if (!input.files[0]) return;
     const fd = new FormData();
     fd.append("file", input.files[0]);
-    const res = await fetch("/api/upload-media", { method: "POST", body: fd }).then((r) => r.json());
+    const res = await fetch("/api/upload-media", {
+      method: "POST",
+      body: fd,
+    }).then((r) => r.json());
     cb(res);
   };
   input.click();
@@ -431,7 +520,8 @@ function uploadMedia(kind, cb) {
 // Probe real media duration (seconds) so the clip's default length matches the file.
 function probeDuration(url, kind, done) {
   const el = document.createElement(kind === "video" ? "video" : "audio");
-  el.preload = "metadata"; el.src = url;
+  el.preload = "metadata";
+  el.src = url;
   el.onloadedmetadata = () => done(isFinite(el.duration) ? el.duration : 0);
   el.onerror = () => done(0);
 }
@@ -442,10 +532,20 @@ function addMediaClip(kind, res) {
     const total = totalFrames();
     let len = dur > 0 ? Math.round(dur * fps) : total;
     len = Math.max(MIN_LEN, Math.min(len, total));
-    const clip = { id: newId(), kind, file: res.file, url: res.url, name: res.name,
-                   start: 0, length: len, trimStart: 0 };
-    if (kind === "audio") { clip.voice = true; state.audioClips.push(clip); }
-    else state.videoClips.push(clip);
+    const clip = {
+      id: newId(),
+      kind,
+      file: res.file,
+      url: res.url,
+      name: res.name,
+      start: 0,
+      length: len,
+      trimStart: 0,
+    };
+    if (kind === "audio") {
+      clip.voice = true;
+      state.audioClips.push(clip);
+    } else state.videoClips.push(clip);
     renderTimeline();
     selectClip(clip.id);
   });
@@ -455,26 +555,56 @@ function addMediaClip(kind, res) {
 function buildTimelineData() {
   let cursor = 0;
   const segments = state.segments.map((s) => {
-    const seg = { id: s.id, start: cursor, length: s.length, prompt: s.prompt || "", type: s.type, isEndFrame: !!s.isEndFrame };
-    if (s.type === "image" && s.imageFile) { seg.imageFile = s.imageFile; seg.imageB64 = s.imageB64; }
+    const seg = {
+      id: s.id,
+      start: cursor,
+      length: s.length,
+      prompt: s.prompt || "",
+      type: s.type,
+      isEndFrame: !!s.isEndFrame,
+    };
+    if (s.type === "image" && s.imageFile) {
+      seg.imageFile = s.imageFile;
+      seg.imageB64 = s.imageB64;
+    }
     cursor += s.length;
     return seg;
   });
   const audioSegments = state.audioClips.map((c) => ({
-    id: c.id, audioFile: c.file, start: c.start, length: c.length, trimStart: c.trimStart || 0, voice: !!c.voice,
+    id: c.id,
+    audioFile: c.file,
+    start: c.start,
+    length: c.length,
+    trimStart: c.trimStart || 0,
+    voice: !!c.voice,
   }));
   const motionSegments = state.videoClips.map((c) => ({
-    id: c.id, videoFile: c.file, start: c.start, length: c.length, trimStart: c.trimStart || 0,
+    id: c.id,
+    videoFile: c.file,
+    start: c.start,
+    length: c.length,
+    trimStart: c.trimStart || 0,
   }));
   return {
-    mainTrackEnabled: true, audioTrackEnabled: $("useAudio").checked,
-    motionTrackEnabled: $("useMotion").checked, showFilenames: true,
-    overrideAudio: $("overrideAudio").checked, inpaint_audio: $("inpaintAudio").checked,
-    global_prompt: $("globalPrompt").value, retake_global_prompt: "",
-    retakeMode: false, retakeStart: 0, retakeLength: 0, retakePrompt: "",
-    retakeStrength: 1, retakeVideo: null,
-    normalStartFrame: 0, normalDurationFrames: cursor,
-    segments, motionSegments, audioSegments,
+    mainTrackEnabled: true,
+    audioTrackEnabled: $("useAudio").checked,
+    motionTrackEnabled: $("useMotion").checked,
+    showFilenames: true,
+    overrideAudio: $("overrideAudio").checked,
+    inpaint_audio: $("inpaintAudio").checked,
+    global_prompt: $("globalPrompt").value,
+    retake_global_prompt: "",
+    retakeMode: false,
+    retakeStart: 0,
+    retakeLength: 0,
+    retakePrompt: "",
+    retakeStrength: 1,
+    retakeVideo: null,
+    normalStartFrame: 0,
+    normalDurationFrames: cursor,
+    segments,
+    motionSegments,
+    audioSegments,
   };
 }
 
@@ -504,10 +634,14 @@ async function generate() {
   };
   startGenerating();
   const res = await api("/api/generate", {
-    method: "POST", headers: { "Content-Type": "application/json" },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
   });
-  if (res.error) { showGenError(res.error); return; }
+  if (res.error) {
+    showGenError(res.error);
+    return;
+  }
   if (res.seed != null) $("seed").value = res.seed;
 }
 
@@ -551,7 +685,6 @@ function showPreview(dataUrl, mime) {
 
 function setGenStage(label, overallPct) {
   $("stageLabel").textContent = label;
-  $("genStageLabel").textContent = label;
   if (overallPct != null) $("stageBar").style.width = `${overallPct}%`;
 }
 
@@ -568,7 +701,10 @@ function showGenError(message) {
 function connectWS() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen = () => setInterval(() => { if (ws.readyState === 1) ws.send("ping"); }, 20000);
+  ws.onopen = () =>
+    setInterval(() => {
+      if (ws.readyState === 1) ws.send("ping");
+    }, 20000);
   ws.onmessage = (ev) => handleWS(JSON.parse(ev.data));
   ws.onclose = () => setTimeout(connectWS, 2000);
 }
@@ -577,7 +713,8 @@ function handleWS(m) {
   switch (m.type) {
     case "stage": {
       const idx = STAGE_ORDER.indexOf(m.label);
-      const pct = idx >= 0 ? Math.round(((idx + 1) / STAGE_ORDER.length) * 100) : null;
+      const pct =
+        idx >= 0 ? Math.round(((idx + 1) / STAGE_ORDER.length) * 100) : null;
       setGenStage(m.label, pct);
       break;
     }
@@ -612,17 +749,22 @@ function onComplete(url) {
     $("downloadVideo").href = url;
     setPhase("result");
   } else {
-    showGenError("Generation finished but produced no video. Check the engine console for details.");
+    showGenError(
+      "Generation finished but produced no video. Check the engine console for details.",
+    );
   }
 }
 
 /* ------------------------------- models ------------------------------- */
 function refreshModelBadge() {
-  const missing = (state.config.models || []).filter((m) => m.required && !m.present).length;
+  const missing = (state.config.models || []).filter(
+    (m) => m.required && !m.present,
+  ).length;
   const badge = $("modelBadge");
   const gen = $("generate");
   if (missing === 0) {
-    badge.textContent = "Models ready"; badge.className = "badge badge-good";
+    badge.textContent = "Models ready";
+    badge.className = "badge badge-good";
     gen.disabled = false;
   } else {
     badge.textContent = `${missing} model${missing > 1 ? "s" : ""} missing`;
@@ -645,7 +787,11 @@ function renderModels() {
     item.className = "model-item";
     item.dataset.id = m.id;
     const statusClass = m.present ? "badge-good" : "badge-bad";
-    const statusText = m.present ? (m.located_path ? "Located" : "Ready") : "Missing";
+    const statusText = m.present
+      ? m.located_path
+        ? "Located"
+        : "Ready"
+      : "Missing";
     item.innerHTML = `
       <div class="model-row">
         <div>
@@ -655,8 +801,12 @@ function renderModels() {
         </div>
         <div class="model-actions">
           <span class="model-status ${statusClass}">${statusText}</span>
-          ${m.present ? "" : `<button class="btn btn-sm dl">Download</button>
-          <button class="btn btn-sm loc">Locate…</button>`}
+          ${
+            m.present
+              ? ""
+              : `<button class="btn btn-sm dl">Download</button>
+          <button class="btn btn-sm loc">Locate…</button>`
+          }
         </div>
       </div>
       <div class="bar hidden"><div class="bar-fill"></div></div>
@@ -674,7 +824,8 @@ async function download(id) {
   item.querySelector(".bar").classList.remove("hidden");
   item.querySelector(".dlmsg").textContent = "Starting…";
   await api("/api/models/download", {
-    method: "POST", headers: { "Content-Type": "application/json" },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id }),
   });
 }
@@ -685,16 +836,24 @@ function updateDownload(m) {
   item.querySelector(".bar").classList.remove("hidden");
   if (m.pct != null) item.querySelector(".bar-fill").style.width = `${m.pct}%`;
   const msg = item.querySelector(".dlmsg");
-  if (m.status === "done") { msg.textContent = "Downloaded ✓"; setTimeout(reloadModels, 800); }
-  else if (m.status === "error") { msg.textContent = m.message || "Error"; }
-  else if (m.total) { msg.textContent = `${fmtBytes(m.downloaded)} / ${fmtBytes(m.total)} (${m.pct}%)`; }
+  if (m.status === "done") {
+    msg.textContent = "Downloaded ✓";
+    setTimeout(reloadModels, 800);
+  } else if (m.status === "error") {
+    msg.textContent = m.message || "Error";
+  } else if (m.total) {
+    msg.textContent = `${fmtBytes(m.downloaded)} / ${fmtBytes(m.total)} (${m.pct}%)`;
+  }
 }
 
 async function locate(id) {
-  const path = prompt("Full path to the model file on your disk / external drive:");
+  const path = prompt(
+    "Full path to the model file on your disk / external drive:",
+  );
   if (!path) return;
   const res = await api("/api/models/locate", {
-    method: "POST", headers: { "Content-Type": "application/json" },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id, path }),
   });
   alert(res.message || (res.ok ? "Located" : "Failed"));
@@ -716,45 +875,80 @@ function uploadFor(callback) {
     if (!input.files[0]) return;
     const fd = new FormData();
     fd.append("file", input.files[0]);
-    const res = await fetch("/api/upload-image", { method: "POST", body: fd }).then((r) => r.json());
+    const res = await fetch("/api/upload-image", {
+      method: "POST",
+      body: fd,
+    }).then((r) => r.json());
     callback(res);
   };
   input.click();
 }
 
 function pickImage() {
-  uploadFor((res) => addSegment("image", "Shot based on the reference image.", { imageFile: res.imageFile, imageB64: res.imageB64 }));
+  uploadFor((res) =>
+    addSegment("image", "Shot based on the reference image.", {
+      imageFile: res.imageFile,
+      imageB64: res.imageB64,
+    }),
+  );
 }
 
 function replaceImage() {
   const s = state.segments.find((x) => x.id === state.selectedId);
   if (!s) return;
-  uploadFor((res) => { s.imageFile = res.imageFile; s.imageB64 = res.imageB64; s.type = "image"; renderTimeline(); selectSegment(s.id); });
+  uploadFor((res) => {
+    s.imageFile = res.imageFile;
+    s.imageB64 = res.imageB64;
+    s.type = "image";
+    renderTimeline();
+    selectSegment(s.id);
+  });
 }
 
 /* ------------------------------- modals ------------------------------- */
-function openModal(id) { $(id).classList.add("open"); }
-function closeModal(id) { $(id).classList.remove("open"); }
+function openModal(id) {
+  $(id).classList.add("open");
+}
+function closeModal(id) {
+  $(id).classList.remove("open");
+}
 
 /* ------------------------------- events / utils ------------------------------- */
 function wireEvents() {
   $("addText").addEventListener("click", () => addSegment("text", ""));
   $("addImage").addEventListener("click", pickImage);
-  $("addAudio").addEventListener("click", () => uploadMedia("audio", (res) => addMediaClip("audio", res)));
-  $("addVideo").addEventListener("click", () => uploadMedia("video", (res) => addMediaClip("video", res)));
+  $("addAudio").addEventListener("click", () =>
+    uploadMedia("audio", (res) => addMediaClip("audio", res)),
+  );
+  $("addVideo").addEventListener("click", () =>
+    uploadMedia("video", (res) => addMediaClip("video", res)),
+  );
   $("generate").addEventListener("click", generate);
-  $("interrupt").addEventListener("click", () => api("/api/interrupt", { method: "POST" }));
+  $("interrupt").addEventListener("click", () =>
+    api("/api/interrupt", { method: "POST" }),
+  );
 
   $("openModels").addEventListener("click", openModels);
   $("closeModels").addEventListener("click", () => closeModal("modelsModal"));
   $("openAdvanced").addEventListener("click", () => openModal("advancedModal"));
-  $("closeAdvanced").addEventListener("click", () => closeModal("advancedModal"));
+  $("closeAdvanced").addEventListener("click", () =>
+    closeModal("advancedModal"),
+  );
   // click on backdrop closes the modal
   document.querySelectorAll(".modal").forEach((m) =>
-    m.addEventListener("pointerdown", (e) => { if (e.target === m) closeModal(m.id); }));
+    m.addEventListener("pointerdown", (e) => {
+      if (e.target === m) closeModal(m.id);
+    }),
+  );
 
-  $("duration").addEventListener("change", () => { fitToTotal(); renderTimeline(); });
-  $("fps").addEventListener("change", () => { fitToTotal(); renderTimeline(); });
+  $("duration").addEventListener("change", () => {
+    fitToTotal();
+    renderTimeline();
+  });
+  $("fps").addEventListener("change", () => {
+    fitToTotal();
+    renderTimeline();
+  });
   $("useMotion").addEventListener("change", renderClips);
   $("useAudio").addEventListener("change", renderClips);
   $("lipSync").addEventListener("change", renderClips);
@@ -762,18 +956,37 @@ function wireEvents() {
   // main-shot editor
   $("segPrompt").addEventListener("input", (e) => {
     const s = state.segments.find((x) => x.id === state.selectedId);
-    if (s) { s.prompt = e.target.value; renderMain(); }
+    if (s) {
+      s.prompt = e.target.value;
+      renderMain();
+    }
   });
-  $("segClose").addEventListener("click", () => { state.selectedId = null; $("segEditor").classList.add("hidden"); renderMain(); });
-  $("segDelete").addEventListener("click", () => { if (state.selectedId) removeSegment(state.selectedId); });
+  $("segClose").addEventListener("click", () => {
+    state.selectedId = null;
+    $("segEditor").classList.add("hidden");
+    renderMain();
+  });
+  $("segDelete").addEventListener("click", () => {
+    if (state.selectedId) removeSegment(state.selectedId);
+  });
   $("segReplaceImg").addEventListener("click", replaceImage);
 
   // clip editor
-  $("clipClose").addEventListener("click", () => { state.selectedClipId = null; $("clipEditor").classList.add("hidden"); renderClips(); });
-  $("clipDelete").addEventListener("click", () => { if (state.selectedClipId) removeClip(state.selectedClipId); });
+  $("clipClose").addEventListener("click", () => {
+    state.selectedClipId = null;
+    $("clipEditor").classList.add("hidden");
+    renderClips();
+  });
+  $("clipDelete").addEventListener("click", () => {
+    if (state.selectedClipId) removeClip(state.selectedClipId);
+  });
   $("clipVoice").addEventListener("change", (e) => {
     const c = findClip(state.selectedClipId);
-    if (c) { c.voice = e.target.checked; renderTimeline(); selectClip(c.id); }
+    if (c) {
+      c.voice = e.target.checked;
+      renderTimeline();
+      selectClip(c.id);
+    }
   });
 
   // stepper navigation
@@ -781,22 +994,34 @@ function wireEvents() {
     el.addEventListener("click", () => {
       if (el.disabled) return;
       if (el.dataset.step === "setup") setPhase("setup");
-      else if (el.dataset.step === "result" && state.hasResult) setPhase("result");
+      else if (el.dataset.step === "result" && state.hasResult)
+        setPhase("result");
     });
   });
 
   // result actions
   $("editAgain").addEventListener("click", () => setPhase("setup"));
-  $("newVideo").addEventListener("click", () => { $("video").removeAttribute("src"); state.hasResult = false; setPhase("setup"); });
+  $("newVideo").addEventListener("click", () => {
+    $("video").removeAttribute("src");
+    state.hasResult = false;
+    setPhase("setup");
+  });
 }
 
 function escapeHtml(s) {
-  return (s || "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  return (s || "").replace(
+    /[&<>"]/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c],
+  );
 }
 function fmtBytes(b) {
   if (!b) return "0 B";
-  const u = ["B", "KB", "MB", "GB"]; let i = 0;
-  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  const u = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  while (b >= 1024 && i < u.length - 1) {
+    b /= 1024;
+    i++;
+  }
   return `${b.toFixed(1)} ${u[i]}`;
 }
 
