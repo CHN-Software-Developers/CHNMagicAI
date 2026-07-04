@@ -24,11 +24,11 @@ VIDEO_EXTS = (".mp4", ".webm", ".mov", ".mkv", ".gif")
 
 # ComfyUI node id -> friendly stage label for the progress bar
 STAGE_LABELS = {
-    "35": "Loading models", "12": "Loading models", "6": "Loading models",
-    "8": "Loading models", "36": "Loading models", "13": "Loading models", "10": "Loading models",
-    "131": "Preparing timeline",
-    "133": "Encoding guides", "132": "Encoding guides",
-    "31": "Generating (stage 1)", "19": "Upscaling (stage 2)", "14": "Upscaling latents",
+    "35": "Stage 0: Loading models", "12": "Stage 0: Loading models", "6": "Stage 0: Loading models",
+    "8": "Stage 0: Loading models", "36": "Stage 0: Loading models", "13": "Stage 0: Loading models", "10": "Stage 0: Loading models",
+    "131": "Stage 0: Preparing timeline",
+    "133": "Stage 0: Encoding guides", "132": "Stage 0: Encoding guides",
+    "31": "Stage 1: Crafting", "19": "Stage 2: Upscaling", "14": "Stage 2: Upscaling latents",
     "24": "Decoding audio", "1": "Decoding video",
     "2": "Encoding video", "158": "Encoding video", "37": "Saving video",
     "156": "Post-processing audio", "157": "Post-processing audio",
@@ -160,10 +160,12 @@ async def _consume(queue):
                 _current["errored"] = True
             await hub.broadcast({"type": "error",
                                  "message": _format_error(data)})
+            await _free_models()
         elif mtype in ("execution_interrupted",):
             if data.get("prompt_id") == _current["prompt_id"]:
                 _current["errored"] = True
             await hub.broadcast({"type": "error", "message": "Generation was interrupted."})
+            await _free_models()
         elif mtype in ("status",):
             await hub.broadcast({"type": "status", "data": data})
 
@@ -185,6 +187,20 @@ def _format_error(data):
     return f"{node_type}: {head}" if node_type else head
 
 
+async def _free_models():
+    """Release model weights from VRAM/RAM after a run ends (any outcome).
+
+    Left resident, the ~20GB fp8 model pins VRAM + RAM permanently, which is
+    unusable on low-end PCs. Fire-and-forget: never let a failure here block the
+    completion/error the user is waiting on.
+    """
+    try:
+        async with aiohttp.ClientSession() as session:
+            await comfy.free(session)
+    except Exception:
+        pass
+
+
 async def _on_complete(prompt_id):
     async with aiohttp.ClientSession() as session:
         history = await comfy.get_history(session, prompt_id)
@@ -194,6 +210,7 @@ async def _on_complete(prompt_id):
         await hub.broadcast({"type": "complete", "prompt_id": prompt_id, "video_url": f"/api/media?{q}"})
     else:
         await hub.broadcast({"type": "complete", "prompt_id": prompt_id, "video_url": None})
+    await _free_models()
 
 
 def _find_video_output(history):

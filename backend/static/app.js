@@ -8,12 +8,12 @@ const MIN_LEN = 6; // frames (matches LTX Director MIN_SEGMENT_LENGTH)
 const PHASES = ["setup", "generating", "result"];
 
 const STAGE_ORDER = [
-  "Loading models",
-  "Preparing timeline",
-  "Encoding guides",
-  "Generating (stage 1)",
-  "Upscaling latents",
-  "Upscaling (stage 2)",
+  "Stage 0: Loading models",
+  "Stage 0: Preparing timeline",
+  "Stage 0: Encoding guides",
+  "Stage 1: Crafting",
+  "Stage 2: Upscaling latents",
+  "Stage 2: Upscaling",
   "Decoding audio",
   "Decoding video",
   "Encoding video",
@@ -657,7 +657,6 @@ function startGenerating() {
   $("genPreview").classList.remove("has-preview");
   $("stageBar").style.width = "0%";
   $("stepBar").style.width = "0%";
-  $("stepText").textContent = "";
   setGenStage("Starting…", 0);
   setPhase("generating");
 }
@@ -722,7 +721,6 @@ function handleWS(m) {
       if (m.max) {
         const pct = Math.round((m.value / m.max) * 100);
         $("stepBar").style.width = `${pct}%`;
-        $("stepText").textContent = `Step ${m.value} / ${m.max}`;
       }
       break;
     case "preview":

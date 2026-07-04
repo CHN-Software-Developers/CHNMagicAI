@@ -62,6 +62,18 @@ class ComfyClient:
         async with session.post(f"{self.base}/interrupt") as r:
             return r.status == 200
 
+    async def free(self, session, unload_models=True, free_memory=True):
+        """Ask ComfyUI to release loaded models from VRAM + RAM.
+
+        ComfyUI keeps model weights resident after a run to speed up repeats. On
+        low-VRAM machines that permanent allocation is a problem, so we call this
+        when a generation ends. The worker processes these flags between prompts:
+        `unload_models` -> unload_all_models(), `free_memory` -> free cache + gc.
+        """
+        payload = {"unload_models": unload_models, "free_memory": free_memory}
+        async with session.post(f"{self.base}/free", json=payload) as r:
+            return r.status == 200
+
     async def get_history(self, session, prompt_id):
         async with session.get(f"{self.base}/history/{prompt_id}") as r:
             r.raise_for_status()

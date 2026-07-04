@@ -231,21 +231,22 @@
             ></video>
             <div class="gen-stage-container">
               <div class="gen-stage" id="stageLabel">Starting…</div>
+              <button
+                id="interrupt"
+                title="Cancel generation"
+                class="cancel-btn"
+              >
+                ✖
+              </button>
             </div>
             <div class="stage-bar-container">
-              <div class="bar"><div class="bar-fill" id="stageBar"></div></div>
+              <div class="bar">
+                <div class="bar-fill" id="stageBar"></div>
+                <div class="step-bar-fill" id="stepBar"></div>
+              </div>
             </div>
             <div id="genNoPreview" class="gen-nopreview">
               <div class="spinner"></div>
-            </div>
-          </div>
-          <div class="gen-hud">
-            <div class="bar bar-thin">
-              <div class="bar-fill bar-step" id="stepBar"></div>
-            </div>
-            <div class="gen-hud-foot">
-              <span class="step-text" id="stepText"></span>
-              <button id="interrupt" class="btn btn-danger btn-sm">Stop</button>
             </div>
           </div>
           <div id="genError" class="gen-error hidden"></div>

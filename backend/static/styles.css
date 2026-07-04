@@ -848,16 +848,31 @@ select option {
   border: 1px solid var(--line);
 }
 .gen-stage {
-  font-weight: 700;
-  margin-bottom: 12px;
-  font-size: 15px;
+  font-weight: normal;
+  font-size: 25px;
 }
 .gen-stage-container {
   position: absolute;
+  flex-direction: row;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  align-content: center;
   top: 16px;
   right: 16px;
+  z-index: 10;
+}
+.cancel-btn {
+  background: transparent;
+  border: none;
+  color: white;
+  font-size: 30px;
+  font-weight: 600;
+  cursor: pointer;
 }
 .bar {
+  position: relative;
   height: 12px;
   background: rgba(255, 255, 255, 0.1);
   border-radius: 999px;
@@ -878,7 +893,18 @@ select option {
   height: 100%;
   width: 0%;
   background: #ffffff;
-  opacity: 0.4;
+  opacity: 0.7;
+  transition: width 0.2s ease;
+}
+.step-bar-fill {
+  position: absolute;
+  width: 75%;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 0%;
+  background: #ffffff;
+  opacity: 0.2;
   transition: width 0.2s ease;
 }
 .bar-step {
