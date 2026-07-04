@@ -54,13 +54,13 @@ async function init() {
   state.config = await api("/api/config");
   populateResolution();
   applyDefaults();
-  if (state.segments.length === 0) {
-    state.segments.push(mkSeg("text", "A cinematic establishing shot."));
-    state.segments.push(
-      mkSeg("text", "The camera slowly pushes in, revealing detail."),
-    );
-    fitToTotal();
-  }
+  // if (state.segments.length === 0) {
+  //   state.segments.push(mkSeg("text", "A cinematic establishing shot."));
+  //   state.segments.push(
+  //     mkSeg("text", "The camera slowly pushes in, revealing detail."),
+  //   );
+  //   fitToTotal();
+  // }
   refreshModelBadge();
   connectWS();
   wireEvents();
@@ -251,7 +251,7 @@ function renderMain() {
   if (state.segments.length === 0) {
     const e = document.createElement("div");
     e.className = "tl-empty";
-    e.textContent = "Add a text or image shot to begin.";
+    e.textContent = "Add a text, image or video shot to begin.";
     lane.appendChild(e);
   }
   bindBlockPointer(lane);
@@ -666,9 +666,10 @@ function cprevRenderFrame(frame) {
   const vid = $("cprevVideo");
   const txt = $("cprevText");
   const empty = $("cprevEmpty");
-  const vis = state.segments.length || state.videoClips.length
-    ? activeVisual(Math.min(frame, total - 0.001))
-    : null;
+  const vis =
+    state.segments.length || state.videoClips.length
+      ? activeVisual(Math.min(frame, total - 0.001))
+      : null;
 
   const showOnly = (el) => {
     [img, vid, txt, empty].forEach((n) =>
@@ -681,7 +682,8 @@ function cprevRenderFrame(frame) {
     showOnly(empty);
   } else if (vis.kind === "image") {
     if (!vid.paused) vid.pause();
-    if (img.getAttribute("src") !== vis.seg.imageB64) img.src = vis.seg.imageB64;
+    if (img.getAttribute("src") !== vis.seg.imageB64)
+      img.src = vis.seg.imageB64;
     showOnly(img);
   } else if (vis.kind === "text") {
     if (!vid.paused) vid.pause();
