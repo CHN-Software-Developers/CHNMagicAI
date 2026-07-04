@@ -42,20 +42,53 @@
     <main class="stage">
       <!-- ============ PHASE 1 — COMPOSE ============ -->
       <section id="phaseSetup" class="phase phase-setup">
-        <div class="compose-grid">
-          <!-- Prompt + key settings -->
-          <div class="panel">
-            <label class="field">
-              <span
-                >Global prompt <small>(overall scene &amp; style)</small></span
-              >
-              <textarea
-                id="globalPrompt"
-                rows="2"
-                placeholder="Cinematic street photography, a young woman walking down a cobblestone street at golden hour…"
-              ></textarea>
-            </label>
+        <div class="compose">
+          <!-- Top action row — Generate sits above the preview, top-right -->
+          <div class="compose-top">
+            <h3 class="section-title">Preview</h3>
+            <button id="generate" class="btn btn-primary btn-lg" disabled>
+              Generate video →
+            </button>
+          </div>
 
+          <!-- Composition preview (plays back the timeline you've built — NOT
+               the live per-step generation preview, which appears in phase 2) -->
+          <div class="panel preview-panel">
+            <div class="cprev-stage" id="cprevStage">
+              <div id="cprevEmpty" class="cprev-empty">
+                Press&nbsp;▶ to preview the timeline you've composed.
+              </div>
+              <img
+                id="cprevImg"
+                class="cprev-media hidden"
+                alt="composition preview"
+              />
+              <video
+                id="cprevVideo"
+                class="cprev-media hidden"
+                muted
+                playsinline
+              ></video>
+              <div id="cprevText" class="cprev-text hidden"></div>
+            </div>
+            <div class="cprev-controls">
+              <button
+                id="cprevPlay"
+                class="cprev-play"
+                title="Play / pause preview"
+                aria-label="Play preview"
+              >
+                ▶
+              </button>
+              <div class="cprev-scrub" id="cprevScrub">
+                <div class="cprev-scrub-fill" id="cprevScrubFill"></div>
+              </div>
+              <span id="cprevTime" class="cprev-time">0.0s / 0.0s</span>
+            </div>
+          </div>
+
+          <!-- Basic settings, directly under the preview -->
+          <div class="panel settings-strip">
             <div class="key-settings">
               <label class="field">
                 <span>Resolution</span>
@@ -70,20 +103,6 @@
                 </select>
               </label>
               <label class="field">
-                <span>Duration</span>
-                <div class="unit-input">
-                  <input
-                    id="duration"
-                    type="number"
-                    min="1"
-                    max="60"
-                    step="1"
-                    value="5"
-                  />
-                  <span class="unit">sec</span>
-                </div>
-              </label>
-              <label class="field">
                 <span>Frame rate</span>
                 <div class="unit-input">
                   <input
@@ -95,6 +114,20 @@
                     value="24"
                   />
                   <span class="unit">fps</span>
+                </div>
+              </label>
+              <label class="field">
+                <span>Duration</span>
+                <div class="unit-input">
+                  <input
+                    id="duration"
+                    type="number"
+                    min="1"
+                    max="60"
+                    step="1"
+                    value="5"
+                  />
+                  <span class="unit">sec</span>
                 </div>
               </label>
             </div>
@@ -133,25 +166,46 @@
                 <span class="tl-track-tag">AUDIO</span>
                 <div class="tl-lane" id="laneAudio"></div>
               </div>
+              <!-- Playhead: the draggable position indicator -->
+              <div class="tl-playhead" id="tlPlayhead">
+                <div class="tl-playhead-grip" id="tlPlayheadGrip"></div>
+              </div>
             </div>
+            <p class="hint">
+              Click a shot to edit its prompt, drag to reorder, drag the right
+              edge to change length. Audio/Motion clips drag <b>anywhere</b> and
+              resize from either edge. Drag the ruler or the vertical
+              <b>playhead</b> to scrub the preview above.
+            </p>
+          </div>
 
-            <div class="tl-controls toggles">
+          <!-- Below the timeline: feature toggles + prompt entry areas -->
+          <div class="panel below-tl">
+            <div class="toggles feature-toggles">
               <label class="chk2"
                 ><input id="lipSync" type="checkbox" /> 🎤 Lip-sync video to
                 voice track</label
+              >
+              <label class="chk2"
+                ><input id="bgMusicRemoval" type="checkbox" /> 🎚 Remove
+                background music</label
               >
               <label class="chk2"
                 ><input id="overrideAudio" type="checkbox" /> Use loaded video's
                 own audio</label
               >
             </div>
-            <p class="hint">
-              Main track: click a shot to edit its prompt, drag to reorder, drag
-              the right edge to change length. Audio/Motion clips can be dragged
-              <b>anywhere</b> and resized from either edge. Load a voice clip +
-              tick <b>Lip-sync</b> to drive the characters' mouths from that
-              audio.
-            </p>
+
+            <label class="field">
+              <span
+                >Global prompt <small>(overall scene &amp; style)</small></span
+              >
+              <textarea
+                id="globalPrompt"
+                rows="2"
+                placeholder="Cinematic street photography, a young woman walking down a cobblestone street at golden hour…"
+              ></textarea>
+            </label>
 
             <!-- Selected main-track shot editor -->
             <div id="segEditor" class="seg-editor hidden">
@@ -206,12 +260,6 @@
                 </button>
               </div>
             </div>
-          </div>
-
-          <div class="compose-actions">
-            <button id="generate" class="btn btn-primary btn-lg" disabled>
-              Generate video →
-            </button>
           </div>
         </div>
       </section>
@@ -332,10 +380,6 @@
           <label class="chk2"
             ><input id="inpaintAudio" type="checkbox" checked /> Inpaint audio
             gaps</label
-          >
-          <label class="chk2"
-            ><input id="bgMusicRemoval" type="checkbox" /> Remove background
-            music</label
           >
         </div>
       </div>

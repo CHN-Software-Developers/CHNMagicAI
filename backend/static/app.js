@@ -36,6 +36,19 @@ const state = {
 let segId = 1;
 const newId = () => `seg_${Date.now()}_${segId++}`;
 
+const curFps = () => parseFloat($("fps").value) || 24;
+
+/* Composition preview playback state. This plays back the timeline the user has
+   built (images/videos/audio over the shared frame axis) — it is entirely
+   separate from the live per-step generation preview shown in phase 2. */
+const cprev = {
+  playing: false,
+  playhead: 0, // frames along the shared axis
+  raf: 0,
+  lastT: 0,
+  audioEls: new Map(), // clipId -> HTMLAudioElement
+};
+
 /* ------------------------------- init ------------------------------- */
 async function init() {
   state.config = await api("/api/config");
@@ -51,7 +64,9 @@ async function init() {
   refreshModelBadge();
   connectWS();
   wireEvents();
+  updatePreviewAspect();
   renderTimeline();
+  cprevRenderFrame(0);
   setPhase("setup");
 }
 
@@ -160,6 +175,7 @@ function addSegment(type, prompt = "", extra = {}) {
   fitToTotal();
   renderTimeline();
   selectSegment(s.id);
+  refreshPreview();
 }
 
 function removeSegment(id) {
@@ -170,6 +186,7 @@ function removeSegment(id) {
   }
   if (state.segments.length) fitToTotal();
   renderTimeline();
+  refreshPreview();
 }
 
 /* ------------------------------- timeline render ------------------------------- */
@@ -178,6 +195,7 @@ function renderTimeline() {
   renderMain();
   renderClips();
   updateTimelineInfo();
+  updatePlayhead();
 }
 
 function renderRuler() {
@@ -217,12 +235,14 @@ function renderMain() {
     block.style.left = `${(start / total) * 100}%`;
     block.style.width = `${(s.length / total) * 100}%`;
     const kind = s.type === "image" ? "IMG" : "TEXT";
+    // Image shots render as a repeating filmstrip of the reference thumbnail so
+    // the timeline reads like a frame sequence rather than just prompt text.
     block.innerHTML =
       (s.imageB64
-        ? `<div class="b-thumb" style="background-image:url('${s.imageB64}')"></div>`
+        ? `<div class="b-film" style="background-image:url('${s.imageB64}')"></div>`
         : "") +
       `<div class="b-head"><span class="b-kind">${kind}</span></div>` +
-      `<div class="b-prompt">${escapeHtml(s.prompt || "(no prompt)")}</div>` +
+      `<div class="b-prompt" title="${escapeHtml(s.prompt || "")}">${escapeHtml(s.prompt || "(no prompt)")}</div>` +
       (idx < state.segments.length - 1
         ? `<div class="b-handle" data-handle="1"></div>`
         : "");
@@ -279,10 +299,13 @@ function renderLane(kind, clips, lane, autoOn, autoText, offText) {
     const kindLabel =
       kind === "audio" ? (c.voice ? "VOICE" : "AUDIO") : "VIDEO";
     el.innerHTML =
+      (kind === "video" && c.poster
+        ? `<div class="c-film" style="background-image:url('${c.poster}')"></div>`
+        : "") +
       `<span class="c-kind">${kindLabel}</span>` +
       `<div class="c-handle left" data-handle="left"></div>` +
       `<div class="c-handle right" data-handle="right"></div>` +
-      `<div class="c-label">${escapeHtml(c.name)}</div>`;
+      `<div class="c-label" title="${escapeHtml(c.name)}">${escapeHtml(c.name)}</div>`;
     lane.appendChild(el);
   });
   if (lip && clips.some((c) => c.voice)) {
@@ -498,6 +521,7 @@ function removeClip(id) {
     $("clipEditor").classList.add("hidden");
   }
   renderTimeline();
+  refreshPreview();
 }
 
 /* ------------------------------- media upload ------------------------------- */
@@ -526,8 +550,48 @@ function probeDuration(url, kind, done) {
   el.onerror = () => done(0);
 }
 
+// Grab a single poster frame from a video so the timeline clip can render a
+// filmstrip thumbnail (like the image shots do). Best-effort; calls back with
+// a data URL or null.
+function captureVideoPoster(url, done) {
+  const v = document.createElement("video");
+  v.preload = "auto";
+  v.muted = true;
+  v.crossOrigin = "anonymous";
+  v.src = url;
+  let settled = false;
+  const finish = (val) => {
+    if (settled) return;
+    settled = true;
+    done(val);
+  };
+  v.onloadeddata = () => {
+    try {
+      v.currentTime = Math.min(0.1, (v.duration || 1) / 2);
+    } catch {
+      finish(null);
+    }
+  };
+  v.onseeked = () => {
+    try {
+      const c = document.createElement("canvas");
+      c.width = 160;
+      c.height = Math.max(
+        1,
+        Math.round((160 * (v.videoHeight || 9)) / (v.videoWidth || 16)),
+      );
+      c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+      finish(c.toDataURL("image/jpeg", 0.6));
+    } catch {
+      finish(null);
+    }
+  };
+  v.onerror = () => finish(null);
+  setTimeout(() => finish(null), 4000);
+}
+
 function addMediaClip(kind, res) {
-  const fps = parseFloat($("fps").value) || 24;
+  const fps = curFps();
   probeDuration(res.url, kind, (dur) => {
     const total = totalFrames();
     let len = dur > 0 ? Math.round(dur * fps) : total;
@@ -545,10 +609,244 @@ function addMediaClip(kind, res) {
     if (kind === "audio") {
       clip.voice = true;
       state.audioClips.push(clip);
-    } else state.videoClips.push(clip);
+    } else {
+      clip.poster = null;
+      state.videoClips.push(clip);
+      captureVideoPoster(res.url, (poster) => {
+        clip.poster = poster;
+        renderTimeline();
+      });
+    }
     renderTimeline();
     selectClip(clip.id);
+    refreshPreview();
   });
+}
+
+/* ------------------------------- composition preview ------------------------------- */
+/* Plays back the timeline the user composed: image shots hold on screen for their
+   span, motion-video clips play, audio clips are heard, a text shot shows its prompt
+   as a placeholder card. Scrubbing the playhead seeks to any position while paused. */
+
+// Match the preview stage box to the chosen aspect ratio.
+function updatePreviewAspect() {
+  const a = $("aspect").value;
+  const ratio =
+    a === "portrait" ? "9 / 16" : a === "square" ? "1 / 1" : "16 / 9";
+  const stage = $("cprevStage");
+  stage.style.aspectRatio = ratio;
+  // Non-landscape ratios are height-constrained so the box stays centered and
+  // doesn't grow absurdly tall at full width.
+  stage.classList.toggle("tall", a === "portrait" || a === "square");
+}
+
+// What visual should show at `frame`? A motion-video clip overlays when present,
+// else the covering main shot (image -> its picture, text -> its prompt card).
+function activeVisual(frame) {
+  for (const c of state.videoClips) {
+    if (frame >= c.start && frame < c.start + c.length)
+      return { kind: "video", clip: c };
+  }
+  let cursor = 0;
+  for (const s of state.segments) {
+    if (frame >= cursor && frame < cursor + s.length) {
+      if (s.type === "image" && s.imageB64) return { kind: "image", seg: s };
+      return { kind: "text", seg: s };
+    }
+    cursor += s.length;
+  }
+  return null;
+}
+
+function cprevRenderFrame(frame) {
+  const fps = curFps();
+  const total = totalFrames();
+  frame = Math.max(0, Math.min(frame, total));
+  const img = $("cprevImg");
+  const vid = $("cprevVideo");
+  const txt = $("cprevText");
+  const empty = $("cprevEmpty");
+  const vis = state.segments.length || state.videoClips.length
+    ? activeVisual(Math.min(frame, total - 0.001))
+    : null;
+
+  const showOnly = (el) => {
+    [img, vid, txt, empty].forEach((n) =>
+      n.classList.toggle("hidden", n !== el),
+    );
+  };
+
+  if (!vis) {
+    if (!vid.paused) vid.pause();
+    showOnly(empty);
+  } else if (vis.kind === "image") {
+    if (!vid.paused) vid.pause();
+    if (img.getAttribute("src") !== vis.seg.imageB64) img.src = vis.seg.imageB64;
+    showOnly(img);
+  } else if (vis.kind === "text") {
+    if (!vid.paused) vid.pause();
+    txt.textContent = vis.seg.prompt || "(no prompt for this shot)";
+    showOnly(txt);
+  } else {
+    const c = vis.clip;
+    if (vid.dataset.clip !== c.id) {
+      vid.src = c.url;
+      vid.dataset.clip = c.id;
+    }
+    const t = (frame - c.start + (c.trimStart || 0)) / fps;
+    if (cprev.playing) {
+      if (vid.paused) vid.play().catch(() => {});
+      if (Math.abs(vid.currentTime - t) > 0.3) {
+        try {
+          vid.currentTime = t;
+        } catch {}
+      }
+    } else {
+      if (!vid.paused) vid.pause();
+      try {
+        vid.currentTime = t;
+      } catch {}
+    }
+    showOnly(vid);
+  }
+
+  syncPreviewAudio(frame, fps);
+  updatePlayhead(frame);
+}
+
+// Drive one <audio> element per audio clip so overlapping clips can be heard.
+function syncPreviewAudio(frame, fps) {
+  state.audioClips.forEach((c) => {
+    let el = cprev.audioEls.get(c.id);
+    if (!el) {
+      el = new Audio(c.url);
+      el.preload = "auto";
+      cprev.audioEls.set(c.id, el);
+    }
+    const active = frame >= c.start && frame < c.start + c.length;
+    const t = (frame - c.start + (c.trimStart || 0)) / fps;
+    if (active && cprev.playing) {
+      if (el.paused) {
+        try {
+          el.currentTime = t;
+        } catch {}
+        el.play().catch(() => {});
+      } else if (Math.abs(el.currentTime - t) > 0.3) {
+        try {
+          el.currentTime = t;
+        } catch {}
+      }
+    } else {
+      if (!el.paused) el.pause();
+      if (!cprev.playing && active) {
+        try {
+          el.currentTime = t;
+        } catch {}
+      }
+    }
+  });
+  // Drop elements for clips that no longer exist.
+  for (const [id, el] of cprev.audioEls) {
+    if (!state.audioClips.find((c) => c.id === id)) {
+      el.pause();
+      cprev.audioEls.delete(id);
+    }
+  }
+}
+
+// Position the vertical indicator line + update the time readout & scrub fill.
+function updatePlayhead(frame) {
+  const total = totalFrames();
+  const f =
+    frame == null ? Math.max(0, Math.min(cprev.playhead, total)) : frame;
+  cprev.playhead = f;
+  const pct = total > 0 ? (f / total) * 100 : 0;
+  const ph = $("tlPlayhead");
+  if (ph) ph.style.left = `${pct}%`;
+  const fill = $("cprevScrubFill");
+  if (fill) fill.style.width = `${pct}%`;
+  const fps = curFps();
+  const tEl = $("cprevTime");
+  if (tEl)
+    tEl.textContent = `${(f / fps).toFixed(1)}s / ${(total / fps).toFixed(1)}s`;
+}
+
+function cprevPlay() {
+  if (cprev.playing) return;
+  const total = totalFrames();
+  if (!total) return;
+  if (cprev.playhead >= total - 0.5) cprev.playhead = 0;
+  cprev.playing = true;
+  $("cprevPlay").textContent = "⏸";
+  $("cprevPlay").setAttribute("aria-label", "Pause preview");
+  cprev.lastT = performance.now();
+  const loop = (t) => {
+    if (!cprev.playing) return;
+    const dt = (t - cprev.lastT) / 1000;
+    cprev.lastT = t;
+    cprev.playhead += dt * curFps();
+    if (cprev.playhead >= totalFrames()) {
+      cprev.playhead = totalFrames();
+      cprevRenderFrame(cprev.playhead);
+      cprevPause();
+      return;
+    }
+    cprevRenderFrame(cprev.playhead);
+    cprev.raf = requestAnimationFrame(loop);
+  };
+  cprevRenderFrame(cprev.playhead);
+  cprev.raf = requestAnimationFrame(loop);
+}
+
+function cprevPause() {
+  cprev.playing = false;
+  if (cprev.raf) cancelAnimationFrame(cprev.raf);
+  cprev.raf = 0;
+  $("cprevPlay").textContent = "▶";
+  $("cprevPlay").setAttribute("aria-label", "Play preview");
+  const vid = $("cprevVideo");
+  if (vid && !vid.paused) vid.pause();
+  cprev.audioEls.forEach((el) => {
+    if (!el.paused) el.pause();
+  });
+}
+
+function cprevToggle() {
+  cprev.playing ? cprevPause() : cprevPlay();
+}
+
+// Refresh the paused preview after the composition changes (edit, add, remove).
+// While playing, the raf loop already repaints every frame, so skip.
+function refreshPreview() {
+  if (!cprev.playing) cprevRenderFrame(cprev.playhead);
+}
+
+// Scrubbing: pointer down on the ruler, the preview scrub bar, or the playhead
+// grip pauses and seeks, then follows the pointer. `refEl` is the element whose
+// width maps clientX -> frame (ruler for timeline drags, the scrub bar itself
+// for the preview bar).
+function frameFromClientX(clientX, refEl) {
+  const rect = refEl.getBoundingClientRect();
+  const total = totalFrames();
+  const f = ((clientX - rect.left) / rect.width) * total;
+  return Math.max(0, Math.min(total, f));
+}
+
+function startScrub(e, refEl) {
+  e.preventDefault();
+  cprevPause();
+  const ref = refEl || $("tlRuler");
+  const move = (ev) => {
+    cprev.playhead = frameFromClientX(ev.clientX, ref);
+    cprevRenderFrame(cprev.playhead);
+  };
+  const up = () => {
+    document.removeEventListener("pointermove", move);
+    document.removeEventListener("pointerup", up);
+  };
+  document.addEventListener("pointermove", move);
+  document.addEventListener("pointerup", up);
+  move(e);
 }
 
 /* ------------------------------- generate ------------------------------- */
@@ -646,6 +944,7 @@ async function generate() {
 }
 
 function startGenerating() {
+  cprevPause();
   state.generating = true;
   state.hasResult = false;
   $("genError").classList.add("hidden");
@@ -900,6 +1199,7 @@ function replaceImage() {
     s.type = "image";
     renderTimeline();
     selectSegment(s.id);
+    refreshPreview();
   });
 }
 
@@ -939,16 +1239,39 @@ function wireEvents() {
     }),
   );
 
+  // composition preview
+  $("cprevPlay").addEventListener("click", cprevToggle);
+  $("cprevScrub").addEventListener("pointerdown", (e) =>
+    startScrub(e, $("cprevScrub")),
+  );
+  $("tlRuler").addEventListener("pointerdown", (e) => startScrub(e));
+  $("tlPlayheadGrip").addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    startScrub(e);
+  });
+  $("aspect").addEventListener("change", () => {
+    updatePreviewAspect();
+    refreshPreview();
+  });
+
   $("duration").addEventListener("change", () => {
     fitToTotal();
     renderTimeline();
+    refreshPreview();
   });
   $("fps").addEventListener("change", () => {
     fitToTotal();
     renderTimeline();
+    refreshPreview();
   });
-  $("useMotion").addEventListener("change", renderClips);
-  $("useAudio").addEventListener("change", renderClips);
+  $("useMotion").addEventListener("change", () => {
+    renderClips();
+    refreshPreview();
+  });
+  $("useAudio").addEventListener("change", () => {
+    renderClips();
+    refreshPreview();
+  });
   $("lipSync").addEventListener("change", renderClips);
 
   // main-shot editor
@@ -957,6 +1280,7 @@ function wireEvents() {
     if (s) {
       s.prompt = e.target.value;
       renderMain();
+      refreshPreview();
     }
   });
   $("segClose").addEventListener("click", () => {
