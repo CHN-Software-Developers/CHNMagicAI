@@ -948,6 +948,23 @@ async function generate() {
   if (res.seed != null) $("seed").value = res.seed;
 }
 
+// Map the aspect setting -> a CSS aspect-ratio string.
+function aspectRatioStr(aspect) {
+  return aspect === "portrait"
+    ? "9 / 16"
+    : aspect === "square"
+      ? "1 / 1"
+      : "16 / 9";
+}
+
+// Size a media box to its content's aspect. Landscape stays width-driven (full
+// width, capped); portrait/square become height-driven (`tall`) so they only
+// take the area's height and stay narrow — no stretching across the full width.
+function fitMediaBox(el, ratioStr, tall) {
+  el.style.aspectRatio = ratioStr;
+  el.classList.toggle("tall", !!tall);
+}
+
 function startGenerating() {
   cprevPause();
   state.generating = true;
@@ -959,6 +976,9 @@ function startGenerating() {
   pv.classList.add("hidden");
   $("preview").classList.remove("hidden");
   $("genPreview").classList.remove("has-preview");
+  // Shape the preview box to what we're about to generate.
+  const asp = $("aspect").value;
+  fitMediaBox($("genPreview"), aspectRatioStr(asp), asp !== "landscape");
   $("stageBar").style.width = "0%";
   $("stepBar").style.width = "0%";
   setGenStage("Starting…", 0);
@@ -1047,6 +1067,17 @@ function onComplete(url) {
   if (url) {
     state.hasResult = true;
     const v = $("video");
+    // Fit the result player to the video's real dimensions so portrait/square
+    // output isn't letterboxed inside a wide 16:9 frame.
+    v.onloadedmetadata = () => {
+      if (v.videoWidth && v.videoHeight) {
+        fitMediaBox(
+          v,
+          `${v.videoWidth} / ${v.videoHeight}`,
+          v.videoHeight > v.videoWidth,
+        );
+      }
+    };
     v.src = url;
     $("downloadVideo").href = url;
     setPhase("result");

@@ -810,10 +810,20 @@ select option {
   place-items: center;
   box-shadow: var(--shadow);
 }
+/* Portrait / square: constrain by height so the box stays narrow and centered
+   instead of stretching across the full landscape width. */
+.gen-preview.tall {
+  width: auto;
+  max-width: 100%;
+  height: min(72vh, 760px);
+}
 .gen-preview .preview {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  /* Ask the browser for its best resampling when upscaling the low-res live
+     preview frames — softer, less blocky than nearest-neighbour. */
+  image-rendering: auto;
 }
 .gen-preview .preview:not([src]),
 .gen-preview .preview[src=""] {
@@ -955,6 +965,13 @@ select option {
   border-radius: 16px;
   box-shadow: var(--shadow);
   border: 1px solid var(--line);
+  object-fit: contain;
+}
+/* Portrait / square result: height-driven so it isn't pillarboxed in a wide box. */
+.video.tall {
+  width: auto;
+  max-width: 100%;
+  height: min(72vh, 760px);
 }
 .result-actions {
   display: flex;
