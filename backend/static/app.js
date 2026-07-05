@@ -929,6 +929,9 @@ async function generate() {
     use_custom_motion: $("useMotion").checked,
     inpaint_audio: lip ? true : $("inpaintAudio").checked,
     override_audio: $("overrideAudio").checked,
+    // Backend strips the CinematicAudioSeparation node chain unless this is true,
+    // so the checkbox must be forwarded explicitly or the feature is a no-op.
+    enable_bg_music_removal: $("bgMusicRemoval").checked,
     seed: parseInt($("seed").value) || 0,
     seed_mode: $("seedRandom").checked ? "randomize" : "fixed",
   };
