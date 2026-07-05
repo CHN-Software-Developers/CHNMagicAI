@@ -1059,6 +1059,9 @@ function handleWS(m) {
     case "download":
       updateDownload(m);
       break;
+    case "tts_setup":
+      handleTtsSetup(m);
+      break;
   }
 }
 
@@ -1109,6 +1112,7 @@ function refreshModelBadge() {
 async function openModels() {
   state.models = await api("/api/models");
   renderModels();
+  refreshTtsStatus();
   openModal("modelsModal");
 }
 
@@ -1200,6 +1204,184 @@ async function reloadModels() {
   refreshModelBadge();
 }
 
+/* ------------------------------- voice / TTS ------------------------------- */
+// Pending (not-yet-committed) generated speech lives here so the user can preview
+// and regenerate before dropping it on the timeline. `refFile` is the uploaded
+// reference clip (relative engine-input path) used for zero-shot cloning.
+const tts = { pending: null, refFile: null, installed: false };
+
+function openAudioModal() {
+  switchAudioTab("upload");
+  refreshTtsStatus();
+  openModal("audioModal");
+}
+
+function switchAudioTab(name) {
+  document
+    .querySelectorAll("#audioTabs .tab")
+    .forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
+  document
+    .querySelectorAll("#audioModal .tab-pane")
+    .forEach((p) => p.classList.toggle("hidden", p.dataset.pane !== name));
+}
+
+function populateTtsLangs(langs) {
+  const sel = $("ttsLang");
+  if (sel.options.length) return; // populate once
+  (langs && langs.length ? langs : ["English"]).forEach((l) => {
+    const o = document.createElement("option");
+    o.value = l;
+    o.textContent = l;
+    sel.appendChild(o);
+  });
+}
+
+async function refreshTtsStatus() {
+  let s = null;
+  try {
+    s = await api("/api/tts/status");
+  } catch {
+    s = null;
+  }
+  tts.installed = !!(s && s.installed);
+  populateTtsLangs(s && s.languages);
+  $("ttsUnavailable").classList.toggle("hidden", tts.installed);
+  $("ttsForm").classList.toggle("hidden", !tts.installed);
+  const hasPreset = !!(s && s.available_spks && s.available_spks.length);
+  $("ttsPresetWrap").classList.toggle("hidden", !hasPreset);
+  updateEngineStatus(s);
+  return s;
+}
+
+function updateEngineStatus(s) {
+  const el = $("ttsEngineStatus");
+  if (!el) return;
+  if (!s) {
+    el.textContent = "Status unavailable.";
+    return;
+  }
+  if (s.setup_running) {
+    el.textContent = "Installing…";
+    $("ttsInstallBtn").disabled = true;
+    return;
+  }
+  $("ttsInstallBtn").disabled = false;
+  el.textContent = s.installed
+    ? `Installed ✓  (${s.install_dir})${s.running ? " · running" : ""}`
+    : "Not installed.";
+  const dir = $("ttsInstallDir");
+  if (dir && !dir.value && s.install_dir) dir.placeholder = s.install_dir;
+}
+
+function currentVoiceMode() {
+  const r = document.querySelector('input[name="ttsVoice"]:checked');
+  return r ? r.value : "clone";
+}
+
+function syncVoiceMode() {
+  $("ttsCloneArea").classList.toggle("hidden", currentVoiceMode() !== "clone");
+}
+
+function pickRefVoice() {
+  uploadMedia("audio", async (res) => {
+    tts.refFile = res.file;
+    $("ttsRefName").textContent = res.name;
+    $("ttsRefText").value = "";
+    $("ttsStatus").textContent = "Transcribing reference…";
+    try {
+      const t = await api("/api/tts/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file: res.file }),
+      });
+      $("ttsRefText").value = t.ok ? t.text || "" : "";
+      $("ttsStatus").textContent = t.ok
+        ? ""
+        : t.error || "Couldn't transcribe — type it below.";
+    } catch {
+      $("ttsStatus").textContent = "Couldn't transcribe — type it below.";
+    }
+  });
+}
+
+async function ttsGenerate() {
+  const text = $("ttsText").value.trim();
+  if (!text) {
+    $("ttsStatus").textContent = "Enter the dialog to speak.";
+    return;
+  }
+  const mode = currentVoiceMode();
+  if (mode === "clone" && !tts.refFile) {
+    $("ttsStatus").textContent = "Choose a reference voice clip first.";
+    return;
+  }
+  const body = {
+    text,
+    mode,
+    instruct: $("ttsInstruct").value.trim(),
+    ref_text: $("ttsRefText").value.trim(),
+    ref_file: tts.refFile,
+    speed: parseFloat($("ttsSpeed").value) || 1.0,
+  };
+  $("ttsGenerate").disabled = true;
+  $("ttsRegen").disabled = true;
+  $("ttsStatus").textContent =
+    "Generating speech… (first run loads the model — please wait)";
+  try {
+    const res = await api("/api/tts/synthesize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) {
+      tts.pending = res;
+      $("ttsPreview").src = res.url;
+      $("ttsResult").classList.remove("hidden");
+      $("ttsStatus").textContent = "";
+    } else {
+      $("ttsStatus").textContent = res.error || "Speech generation failed.";
+    }
+  } catch {
+    $("ttsStatus").textContent = "Speech generation failed.";
+  } finally {
+    $("ttsGenerate").disabled = false;
+    $("ttsRegen").disabled = false;
+  }
+}
+
+function ttsAddToTimeline() {
+  if (!tts.pending) return;
+  addMediaClip("audio", tts.pending); // adds as a voice clip (voice=true)
+  tts.pending = null;
+  $("ttsResult").classList.add("hidden");
+  $("ttsPreview").removeAttribute("src");
+  closeModal("audioModal");
+}
+
+async function installVoiceEngine() {
+  const dir = $("ttsInstallDir").value.trim();
+  $("ttsInstallBtn").disabled = true;
+  $("ttsSetupLog").classList.remove("hidden");
+  $("ttsSetupLog").textContent = "Starting…";
+  await api("/api/tts/setup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(dir ? { install_dir: dir } : {}),
+  });
+}
+
+function handleTtsSetup(m) {
+  const log = $("ttsSetupLog");
+  if (log) {
+    log.classList.remove("hidden");
+    log.textContent = `${m.stage ? "[" + m.stage + "] " : ""}${m.message || ""}`;
+  }
+  if (m.stage === "done" || m.stage === "error") {
+    $("ttsInstallBtn").disabled = false;
+    refreshTtsStatus();
+  }
+}
+
 /* ------------------------------- image upload ------------------------------- */
 function uploadFor(callback) {
   const input = $("imageFileInput");
@@ -1251,11 +1433,36 @@ function closeModal(id) {
 function wireEvents() {
   $("addText").addEventListener("click", () => addSegment("text", ""));
   $("addImage").addEventListener("click", pickImage);
-  $("addAudio").addEventListener("click", () =>
-    uploadMedia("audio", (res) => addMediaClip("audio", res)),
-  );
+  $("addAudio").addEventListener("click", openAudioModal);
   $("addVideo").addEventListener("click", () =>
     uploadMedia("video", (res) => addMediaClip("video", res)),
+  );
+
+  // Add-audio modal (upload + generate-speech tabs)
+  $("closeAudio").addEventListener("click", () => closeModal("audioModal"));
+  document.querySelectorAll("#audioTabs .tab").forEach((t) =>
+    t.addEventListener("click", () => switchAudioTab(t.dataset.tab)),
+  );
+  $("audioUploadBtn").addEventListener("click", () =>
+    uploadMedia("audio", (res) => {
+      addMediaClip("audio", res);
+      closeModal("audioModal");
+    }),
+  );
+  $("ttsGotoInstall").addEventListener("click", () => {
+    closeModal("audioModal");
+    openModels();
+  });
+  $("ttsRefBtn").addEventListener("click", pickRefVoice);
+  $("ttsGenerate").addEventListener("click", ttsGenerate);
+  $("ttsRegen").addEventListener("click", ttsGenerate);
+  $("ttsAdd").addEventListener("click", ttsAddToTimeline);
+  $("ttsInstallBtn").addEventListener("click", installVoiceEngine);
+  $("ttsSpeed").addEventListener("input", (e) => {
+    $("ttsSpeedVal").textContent = parseFloat(e.target.value).toFixed(1);
+  });
+  document.querySelectorAll('input[name="ttsVoice"]').forEach((r) =>
+    r.addEventListener("change", syncVoiceMode),
   );
   $("generate").addEventListener("click", generate);
   $("interrupt").addEventListener("click", () =>

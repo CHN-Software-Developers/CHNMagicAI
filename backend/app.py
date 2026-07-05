@@ -11,8 +11,10 @@ from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, R
 from fastapi.responses import JSONResponse, Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 
+import bootstrap
 import comfy_client
 import models as model_mgr
+import tts as tts_mod
 import workflow as wf
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -71,6 +73,27 @@ def save_local(settings):
         json.dump(local, f, indent=2)
 
 
+def save_local_tts_dir(path):
+    """Persist only the per-machine voice-engine install location into settings.local.json."""
+    local = {}
+    if os.path.isfile(LOCAL_CONFIG_PATH):
+        with open(LOCAL_CONFIG_PATH, "r", encoding="utf-8") as f:
+            local = json.load(f)
+    local.setdefault("tts", {})["install_dir"] = path
+    with open(LOCAL_CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(local, f, indent=2)
+
+
+def _engine_input_path(rel_or_abs):
+    """Resolve a timeline media reference (e.g. 'whatdreamscost/clip.wav') to an absolute path in
+    the engine input dir. Absolute paths are returned as-is."""
+    if not rel_or_abs:
+        return None
+    if os.path.isabs(rel_or_abs):
+        return rel_or_abs
+    return os.path.join(ROOT, settings["engine_dir"], "input", rel_or_abs)
+
+
 class Hub:
     """Fan-out of JSON messages to all connected frontend websockets."""
     def __init__(self):
@@ -97,6 +120,8 @@ app = FastAPI(title="AIVideoBuilder")
 hub = Hub()
 settings = load_settings()
 comfy = comfy_client.ComfyClient(settings["comfy_host"], settings["comfy_port"])
+tts_svc = tts_mod.TtsService(settings)
+_tts_setup = {"running": False}
 # Tracks the in-flight prompt. `errored` is set when ComfyUI reports an execution_error for it,
 # so the trailing `executing {node: null}` (which ComfyUI sends even after a failure) is not
 # mistaken for a successful completion.
@@ -363,6 +388,123 @@ async def api_media(filename: str, subfolder: str = "", type: str = "output"):
     async with aiohttp.ClientSession() as session:
         data, ctype = await comfy.fetch_view(session, filename, subfolder, type)
     return Response(content=data, media_type=ctype)
+
+
+# ------------------------------- voice / TTS -------------------------------
+
+@app.get("/api/tts/status")
+async def api_tts_status():
+    status = await tts_svc.status()
+    status["setup_running"] = _tts_setup["running"]
+    status["languages"] = settings.get("tts", {}).get("languages", [])
+    return status
+
+
+@app.post("/api/tts/set-install-dir")
+async def api_tts_set_dir(req: Request):
+    body = await req.json()
+    path = (body.get("path") or "").strip()
+    if not path:
+        return JSONResponse({"ok": False, "error": "path required"}, status_code=400)
+    settings.setdefault("tts", {})["install_dir"] = path
+    save_local_tts_dir(path)
+    return {"ok": True, "install_dir": os.path.abspath(path)}
+
+
+@app.post("/api/tts/setup")
+async def api_tts_setup(req: Request):
+    body = await req.json()
+    install_dir = (body.get("install_dir") or settings.get("tts", {}).get("install_dir") or "").strip()
+    if install_dir:
+        settings.setdefault("tts", {})["install_dir"] = install_dir
+        save_local_tts_dir(install_dir)
+    if _tts_setup["running"]:
+        return {"started": False, "message": "Voice engine setup is already running."}
+    loop = asyncio.get_event_loop()
+
+    def cb(d):
+        loop.call_soon_threadsafe(asyncio.ensure_future,
+                                  hub.broadcast({"type": "tts_setup", **d}))
+
+    async def run():
+        _tts_setup["running"] = True
+        await hub.broadcast({"type": "tts_setup", "stage": "start", "message": "Starting voice engine setup…"})
+        try:
+            ok, message = await loop.run_in_executor(
+                None, lambda: bootstrap.setup_tts(install_dir or None, cb))
+        except Exception as e:  # never let setup crash the app
+            ok, message = False, f"{type(e).__name__}: {e}"
+        _tts_setup["running"] = False
+        await hub.broadcast({"type": "tts_setup", "stage": "done" if ok else "error",
+                             "message": message, "ok": ok})
+
+    asyncio.create_task(run())
+    return {"started": True}
+
+
+@app.post("/api/tts/transcribe")
+async def api_tts_transcribe(req: Request):
+    body = await req.json()
+    audio = _engine_input_path(body.get("file"))
+    if not audio or not os.path.isfile(audio):
+        return JSONResponse({"ok": False, "error": "reference clip not found"}, status_code=400)
+    try:
+        data, status = await tts_svc.transcribe({"audio": audio, "language": body.get("language")})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    return JSONResponse(data, status_code=status)
+
+
+@app.post("/api/tts/synthesize")
+async def api_tts_synthesize(req: Request):
+    body = await req.json()
+    text = (body.get("text") or "").strip()
+    if not text:
+        return JSONResponse({"ok": False, "error": "Enter the dialog to speak."}, status_code=400)
+
+    input_dir = os.path.join(ROOT, settings["engine_dir"], "input", _MEDIA_SUBFOLDER)
+    os.makedirs(input_dir, exist_ok=True)
+    import time as _time
+    name = f"speech_{int(_time.time() * 1000)}.wav"
+    out_path = os.path.join(input_dir, name)
+
+    payload = {
+        "text": text,
+        "out_path": out_path,
+        "mode": body.get("mode", "clone"),
+        "instruct": body.get("instruct"),
+        "ref_text": body.get("ref_text"),
+        "spk": body.get("spk"),
+        "speed": body.get("speed", 1.0),
+    }
+    ref = _engine_input_path(body.get("ref_file"))
+    if ref:
+        payload["ref_audio"] = ref
+
+    try:
+        data, status = await tts_svc.synthesize(payload)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+    if status == 200 and data.get("ok"):
+        return {
+            "ok": True,
+            "file": f"{_MEDIA_SUBFOLDER}/{name}",
+            "name": name,
+            "kind": "audio",
+            "url": f"/api/media?filename={name}&subfolder={_MEDIA_SUBFOLDER}&type=input",
+            "duration": data.get("duration"),
+        }
+    return JSONResponse({"ok": False, "error": data.get("error", "Speech generation failed.")},
+                        status_code=status if status != 200 else 500)
+
+
+@app.on_event("shutdown")
+async def _shutdown_tts():
+    try:
+        tts_svc.stop()
+    except Exception:
+        pass
 
 
 # ------------------------------- websocket -------------------------------

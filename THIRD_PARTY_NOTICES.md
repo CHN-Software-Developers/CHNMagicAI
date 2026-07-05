@@ -45,6 +45,28 @@ invokes the vendored **MSST** framework's BandIt Plus model in an isolated subpr
   | spafe | BSD-3-Clause |
   | ml-collections | Apache-2.0 |
 
+## Voice / text-to-speech (optional, isolated install)
+
+The optional voice feature ("Generate speech" in the Add-audio dialog) installs and runs
+**CosyVoice 3** in its own isolated Python environment under a user-chosen directory (default
+`tts_engine/`), fully separate from the ComfyUI engine. It is driven over localhost by our own
+service wrapper `tts_service/server.py` (GPL-3.0), which imports the **unmodified** upstream
+packages — no vendored TTS source is patched. Because the isolated environment lives outside the
+committed tree and is fetched at install time, these components are **not vendored as source** in
+this repository:
+
+| Component | Source | License | Notes |
+|---|---|---|---|
+| CosyVoice (code) | https://github.com/FunAudioLLM/CosyVoice | Apache-2.0 | Cloned pristine into `<install_dir>/CosyVoice` at first install. Apache-2.0 is one-way compatible with GPL-3.0; the combined work remains GPL-3.0. |
+| Fun-CosyVoice3-0.5B (model weights) | https://huggingface.co/FunAudioLLM/Fun-CosyVoice3-0.5B-2512 | Apache-2.0 | Downloaded into `<install_dir>/models/`; commercial use permitted. |
+| faster-whisper | https://github.com/SYSTRAN/faster-whisper | MIT | Auto-transcribes the reference clip for voice cloning. |
+| Whisper model (Systran/faster-whisper-*) | https://huggingface.co/Systran | MIT | Small ASR model, downloaded at install. |
+
+**Voice-cloning ethics/consent:** the cloning path synthesizes speech in the likeness of a supplied
+reference voice. Only clone voices you have the right to use, and follow CosyVoice's own usage
+notice. AIVideoBuilder surfaces this caveat in the install panel. Verify each model's usage terms
+before redistribution.
+
 ## Modification policy (GPL-3.0 §5a)
 
 Vendored code under `engine/` is kept **pristine**. Application logic lives in our own files

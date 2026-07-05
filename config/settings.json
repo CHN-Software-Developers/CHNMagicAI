@@ -92,5 +92,29 @@
     "seed": 0,
     "seed_mode": "randomize",
     "enable_bg_music_removal": false
+  },
+  "tts": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 50000,
+    "install_dir": "tts_engine",
+    "repo": "https://github.com/FunAudioLLM/CosyVoice",
+    "commit": "",
+    "model_repo": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
+    "model_dirname": "Fun-CosyVoice3-0.5B",
+    "whisper_model": "base",
+    "startup_timeout_seconds": 300,
+    "idle_shutdown_seconds": 600,
+    "languages": [
+      "English",
+      "Chinese",
+      "Japanese",
+      "Korean",
+      "German",
+      "Spanish",
+      "French",
+      "Italian",
+      "Russian"
+    ]
   }
 }

@@ -1284,3 +1284,154 @@ code {
   border-radius: 6px;
   font-size: 12px;
 }
+
+/* ============================================================================
+   Add-audio modal (upload / generate-speech) + Voice engine panel
+   ============================================================================ */
+.tabs {
+  display: flex;
+  gap: 6px;
+  margin: 14px 0 4px;
+  border-bottom: 1px solid var(--line);
+}
+.tab {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  padding: 9px 14px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.tab:hover {
+  color: var(--text);
+}
+.tab.active {
+  color: var(--text);
+  border-bottom-color: var(--text);
+}
+.tab-pane {
+  padding-top: 14px;
+}
+
+.tts-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 12px;
+  margin-top: 12px;
+}
+.tts-speed {
+  min-width: 140px;
+}
+.tts-speed input[type="range"] {
+  width: 100%;
+}
+.tts-voice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 16px 0 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.tts-voice-label {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--muted);
+}
+.tts-ref-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.tts-ref-name {
+  font-size: 12px;
+  color: var(--muted);
+  word-break: break-all;
+}
+.tts-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+.tts-status {
+  font-size: 12px;
+  color: var(--muted);
+}
+.tts-result {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tts-result audio {
+  width: 100%;
+}
+.tts-result-actions {
+  display: flex;
+  gap: 10px;
+}
+.tts-note {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Voice engine section inside the Models modal */
+.voice-engine {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.voice-engine h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+.ve-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  margin-top: 10px;
+}
+.ve-dir {
+  flex: 1;
+}
+.ve-status {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.ve-log {
+  margin-top: 8px;
+  background: #000;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+@media (max-width: 640px) {
+  .tts-row {
+    grid-template-columns: 1fr;
+  }
+}

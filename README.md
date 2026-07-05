@@ -36,6 +36,18 @@ The **engine source is committed** with the app, so a fresh clone is self-contai
 things fetched on first run are the Python packages (into `engine/python/`) and the model weights
 (into `models/`) — both git-ignored. There is no build step for the UI.
 
+## Voice / speech (optional)
+
+The **+ Audio** dialog can either upload an audio file or **generate speech** — type dialog and pick
+a tone/language, or **clone a voice** from a short reference clip (the reference is auto-transcribed
+with Whisper; the transcript stays editable). Generated speech is previewed and can be regenerated
+before you drop it on the timeline; ticking **Lip-sync** then syncs the video to that voice.
+
+Speech uses **CosyVoice 3** (Apache-2.0), installed on demand from the **Models** panel into its own
+isolated environment (location is user-selectable, default `tts_engine/`). It stays separate from
+the video engine, so it's fully optional — if it isn't installed, everything else works unchanged.
+**Only clone voices you have the right to use.** See `THIRD_PARTY_NOTICES.md`.
+
 ## Development
 
 - Run the whole app: `run.bat` (first run auto-creates `engine/python/` and installs deps).

@@ -272,6 +272,171 @@ def verify_gpu(py):
         log(f"GPU self-check skipped: {e}")
 
 
+# ------------------------------- voice / TTS engine (optional, isolated) -------------------------------
+
+# CosyVoice's requirements.txt pins packages that don't build on Windows (deepspeed, tensorrt) or
+# that we substitute; strip/rewrite them so the one-click install has a chance to succeed. The
+# stripped packages are only needed for training / TensorRT / DeepSpeed acceleration, not inference.
+_TTS_REQ_SKIP = ("deepspeed", "tensorrt", "flash-attn", "flash_attn", "triton",
+                 "ttsfrd", "ttsfrd-dependency", "pynini", "wetextprocessing", "gradio")
+# Optional text-frontend packages: better number/date/dialect normalization, but notoriously hard to
+# build on Windows. Installed best-effort; CosyVoice falls back to a basic normalizer without them.
+_TTS_OPTIONAL_FRONTEND = ["pynini==2.1.5", "WeTextProcessing"]
+_TTS_SERVER_DEPS = ["fastapi", "uvicorn", "faster-whisper", "huggingface_hub", "modelscope"]
+
+
+def _tts_venv_python(install_dir):
+    for c in (os.path.join(install_dir, "python", "Scripts", "python.exe"),
+              os.path.join(install_dir, "python", "bin", "python3"),
+              os.path.join(install_dir, "python", "bin", "python")):
+        if os.path.isfile(c):
+            return c
+    return None
+
+
+def _pip_tolerant(py, args, trusted, emit):
+    """pip install that logs+continues on failure (for optional/fragile deps)."""
+    try:
+        pip(py, args, trusted)
+        return True
+    except subprocess.CalledProcessError as e:
+        emit("deps", f"(optional) skipped: {' '.join(args)} -> {e}")
+        return False
+
+
+def _filtered_requirements(src_req, dst_req):
+    """Copy CosyVoice's requirements.txt minus Windows-hostile / substituted lines."""
+    kept = []
+    with open(src_req, "r", encoding="utf-8") as f:
+        for raw in f:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            name = line.split("==")[0].split(">=")[0].split("<")[0].split("[")[0].strip().lower()
+            if name in _TTS_REQ_SKIP:
+                continue
+            if name in ("onnxruntime-gpu",):
+                line = "onnxruntime"
+            kept.append(line)
+    with open(dst_req, "w", encoding="utf-8") as f:
+        f.write("\n".join(kept) + "\n")
+    return kept
+
+
+def setup_tts(install_dir=None, progress_cb=None):
+    """Provision the isolated CosyVoice 3 voice engine. Opt-in and idempotent.
+
+    Creates a private venv + a pristine CosyVoice clone + models under `install_dir` (user-chosen),
+    fully separate from the ComfyUI engine. `progress_cb(dict)` receives coarse stage updates.
+    Returns (ok, message).
+    """
+    settings = load_settings()
+    setup = settings.get("setup", {})
+    tts = settings.get("tts", {})
+    trusted = setup.get("pip_trusted_hosts", [])
+
+    if not install_dir:
+        d = tts.get("install_dir", "tts_engine")
+        install_dir = d if os.path.isabs(d) else os.path.join(ROOT, d)
+    install_dir = os.path.abspath(install_dir)
+
+    def emit(stage, message="", pct=None):
+        log(f"[tts] {stage}: {message}")
+        if progress_cb:
+            progress_cb({"stage": stage, "message": message, "pct": pct})
+
+    try:
+        os.makedirs(install_dir, exist_ok=True)
+        cosy_dir = os.path.join(install_dir, "CosyVoice")
+        models_dir = os.path.join(install_dir, "models")
+        model_dir = os.path.join(models_dir, tts.get("model_dirname", "Fun-CosyVoice3-0.5B"))
+        hf_cache = os.path.join(install_dir, "hf_cache")
+        os.makedirs(models_dir, exist_ok=True)
+        os.makedirs(hf_cache, exist_ok=True)
+
+        # 1) clone CosyVoice (pristine, with submodules for Matcha-TTS)
+        if not os.path.isfile(os.path.join(cosy_dir, "cosyvoice", "cli", "cosyvoice.py")):
+            emit("clone", "Downloading CosyVoice (pristine)…")
+            run(["git", "clone", "--recursive", "--depth", "1",
+                 tts.get("repo", "https://github.com/FunAudioLLM/CosyVoice"), cosy_dir])
+            if tts.get("commit"):
+                run(["git", "fetch", "--depth", "1", "origin", tts["commit"]], cwd=cosy_dir)
+                run(["git", "checkout", tts["commit"]], cwd=cosy_dir)
+                run(["git", "submodule", "update", "--init", "--recursive"], cwd=cosy_dir)
+        else:
+            emit("clone", "CosyVoice source present.")
+
+        # 2) isolated venv
+        py = _tts_venv_python(install_dir)
+        if not py:
+            emit("env", "Creating isolated Python environment…")
+            base = setup.get("base_python") or sys.executable
+            run([base, "-m", "venv", os.path.join(install_dir, "python")])
+            py = _tts_venv_python(install_dir)
+        if not py:
+            return False, "Failed to create the voice engine's Python environment."
+
+        # 3) dependencies
+        pip(py, ["--upgrade", "pip"], trusted)
+        if setup.get("auto_install_torch", True) and not _module_present(py, "torch"):
+            emit("deps", "Installing PyTorch (CUDA)…")
+            pip(py, ["torch", "torchaudio", "--index-url", setup["torch_index_url"]], trusted)
+
+        req = os.path.join(cosy_dir, "requirements.txt")
+        if os.path.isfile(req):
+            emit("deps", "Installing CosyVoice requirements…")
+            filtered = os.path.join(install_dir, "requirements.filtered.txt")
+            _filtered_requirements(req, filtered)
+            # Tolerant: if the batch install trips on one package, fall back to line-by-line so a
+            # single bad pin doesn't abort the whole voice install.
+            if not _pip_tolerant(py, ["-r", filtered], trusted, emit):
+                for line in open(filtered, encoding="utf-8").read().splitlines():
+                    if line.strip():
+                        _pip_tolerant(py, [line.strip()], trusted, emit)
+
+        emit("deps", "Installing Whisper + service dependencies…")
+        pip(py, _TTS_SERVER_DEPS, trusted)
+
+        emit("deps", "Installing text normalization (optional)…")
+        for pkg in _TTS_OPTIONAL_FRONTEND:
+            _pip_tolerant(py, [pkg], trusted, emit)
+
+        # 4) models — downloaded straight into our install_dir (never a hardcoded default location)
+        if not os.path.isdir(model_dir) or not os.listdir(model_dir):
+            emit("model", "Downloading CosyVoice 3 model (~2 GB)…")
+            dl = (
+                "import os;os.environ['HF_HOME']=%r;"
+                "from huggingface_hub import snapshot_download;"
+                "snapshot_download(%r, local_dir=%r)"
+                % (hf_cache, tts.get("model_repo", "FunAudioLLM/Fun-CosyVoice3-0.5B-2512"), model_dir)
+            )
+            run([py, "-c", dl])
+        else:
+            emit("model", "CosyVoice 3 model present.")
+
+        emit("whisper", "Fetching speech-recognition model…")
+        wsize = tts.get("whisper_model", "base")
+        wdl = (
+            "import os;os.environ['HF_HOME']=%r;"
+            "from faster_whisper import WhisperModel;"
+            "WhisperModel(%r, device='cpu', compute_type='int8')"
+            % (hf_cache, wsize)
+        )
+        try:
+            run([py, "-c", wdl])
+        except subprocess.CalledProcessError as e:
+            emit("whisper", f"(warning) could not pre-fetch Whisper model: {e}")
+
+        emit("done", "Voice engine ready.")
+        return True, "Voice engine installed."
+    except subprocess.CalledProcessError as e:
+        emit("error", f"Setup command failed: {e}")
+        return False, f"Voice engine setup failed: {e}"
+    except Exception as e:
+        emit("error", str(e))
+        return False, f"Voice engine setup failed: {e}"
+
+
 # ------------------------------- main -------------------------------
 
 def main():

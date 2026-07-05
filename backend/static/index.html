@@ -398,6 +398,145 @@
           change URLs/versions.
         </p>
         <div id="modelList" class="model-list"></div>
+
+        <!-- Optional voice / TTS engine (isolated install) -->
+        <div class="voice-engine" id="voiceEngine">
+          <h3>
+            Voice engine <small>(text-to-speech &amp; voice cloning)</small>
+          </h3>
+          <p class="hint">
+            Optional. Installs <b>CosyVoice&nbsp;3</b> in its own isolated
+            environment so it can't affect video generation. First install
+            downloads ~2–4&nbsp;GB. Only clone voices you have the right to use.
+          </p>
+          <div class="ve-row">
+            <label class="field ve-dir"
+              ><span>Install location</span
+              ><input id="ttsInstallDir" type="text" placeholder="tts_engine"
+            /></label>
+            <button class="btn" id="ttsInstallBtn">Install voice engine</button>
+          </div>
+          <div class="ve-status" id="ttsEngineStatus">Checking…</div>
+          <div id="ttsSetupLog" class="ve-log hidden"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add-audio modal: upload a file OR generate speech -->
+    <div id="audioModal" class="modal">
+      <div class="modal-box">
+        <div class="modal-head">
+          <h2>Add audio</h2>
+          <button id="closeAudio" class="btn btn-ghost">✕</button>
+        </div>
+        <div class="tabs" id="audioTabs">
+          <button class="tab active" data-tab="upload">⬆ Upload audio</button>
+          <button class="tab" data-tab="speak">🗣 Generate speech</button>
+        </div>
+
+        <!-- Upload tab -->
+        <div class="tab-pane" data-pane="upload">
+          <p class="hint">Add a music or voice file from your computer.</p>
+          <button class="btn btn-primary" id="audioUploadBtn">
+            Choose audio file…
+          </button>
+        </div>
+
+        <!-- Generate speech tab -->
+        <div class="tab-pane hidden" data-pane="speak">
+          <div id="ttsUnavailable" class="tts-note hidden">
+            The voice engine isn't installed yet.
+            <button class="btn btn-sm" id="ttsGotoInstall">
+              Install voice engine
+            </button>
+          </div>
+          <div id="ttsForm">
+            <label class="field">
+              <span>Dialog to speak</span>
+              <textarea
+                id="ttsText"
+                rows="3"
+                placeholder="Type what the voice should say…"
+              ></textarea>
+            </label>
+            <div class="tts-row">
+              <label class="field">
+                <span>Language</span>
+                <select id="ttsLang"></select>
+              </label>
+              <label class="field">
+                <span>Tone / emotion <small>(optional)</small></span>
+                <input
+                  id="ttsInstruct"
+                  type="text"
+                  placeholder="e.g. warm and calm, excited, whispering"
+                />
+              </label>
+              <label class="field tts-speed">
+                <span>Speed <b id="ttsSpeedVal">1.0</b>×</span>
+                <input
+                  id="ttsSpeed"
+                  type="range"
+                  min="0.5"
+                  max="2"
+                  step="0.1"
+                  value="1"
+                />
+              </label>
+            </div>
+
+            <div class="tts-voice">
+              <span class="tts-voice-label">Voice</span>
+              <label class="chk"
+                ><input type="radio" name="ttsVoice" value="clone" checked />
+                Clone from a reference clip</label
+              >
+              <label class="chk" id="ttsPresetWrap"
+                ><input type="radio" name="ttsVoice" value="sft" /> Preset
+                speaker</label
+              >
+            </div>
+
+            <div id="ttsCloneArea">
+              <div class="tts-ref-row">
+                <button class="btn btn-sm" id="ttsRefBtn">
+                  Choose reference voice…
+                </button>
+                <span id="ttsRefName" class="tts-ref-name"
+                  >No reference selected</span
+                >
+              </div>
+              <label class="field">
+                <span
+                  >Reference transcript
+                  <small>(auto-filled, editable)</small></span
+                >
+                <textarea
+                  id="ttsRefText"
+                  rows="2"
+                  placeholder="What the reference clip says…"
+                ></textarea>
+              </label>
+            </div>
+
+            <div class="tts-actions">
+              <button class="btn btn-primary" id="ttsGenerate">
+                Generate speech
+              </button>
+              <span id="ttsStatus" class="tts-status"></span>
+            </div>
+
+            <div id="ttsResult" class="tts-result hidden">
+              <audio id="ttsPreview" controls></audio>
+              <div class="tts-result-actions">
+                <button class="btn btn-sm" id="ttsRegen">↻ Regenerate</button>
+                <button class="btn btn-primary btn-sm" id="ttsAdd">
+                  ＋ Add to timeline
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
