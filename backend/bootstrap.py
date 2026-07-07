@@ -147,7 +147,9 @@ def ensure_venv(setup):
 # ------------------------------- dependencies -------------------------------
 
 def pip(py, args, trusted):
-    cmd = [py, "-m", "pip", "install", "--disable-pip-version-check"]
+    # --no-input: never drop into an interactive username/password prompt (e.g. when an index
+    # returns 401). Unattended installs must fail fast, not block forever on stdin.
+    cmd = [py, "-m", "pip", "install", "--disable-pip-version-check", "--no-input"]
     for h in trusted:
         cmd += ["--trusted-host", h]
     cmd += args
@@ -274,15 +276,19 @@ def verify_gpu(py):
 
 # ------------------------------- voice / TTS engine (optional, isolated) -------------------------------
 
-# CosyVoice's requirements.txt pins packages that don't build on Windows (deepspeed, tensorrt) or
-# that we substitute; strip/rewrite them so the one-click install has a chance to succeed. The
-# stripped packages are only needed for training / TensorRT / DeepSpeed acceleration, not inference.
-_TTS_REQ_SKIP = ("deepspeed", "tensorrt", "flash-attn", "flash_attn", "triton",
-                 "ttsfrd", "ttsfrd-dependency", "pynini", "wetextprocessing", "gradio")
-# Optional text-frontend packages: better number/date/dialect normalization, but notoriously hard to
-# build on Windows. Installed best-effort; CosyVoice falls back to a basic normalizer without them.
-_TTS_OPTIONAL_FRONTEND = ["pynini==2.1.5", "WeTextProcessing"]
-_TTS_SERVER_DEPS = ["fastapi", "uvicorn", "faster-whisper", "huggingface_hub", "modelscope"]
+# The voice engine install is NOT orchestrated inside this app. CosyVoice 3's requirements.txt is a
+# consistent, upstream-tested pin set that its README installs as a single `pip install -r`. We simply
+# generate a readable .bat that runs *that* command in a visible terminal the user can watch. Trying to
+# filter/re-resolve the pins in-process is what made earlier installs backtrack for an hour. Only one
+# tweak is baked in: PIP_CONSTRAINT=setuptools<81 so openai-whisper's old setup.py (which imports
+# pkg_resources, removed from setuptools>=81) can still build. deepspeed / tensorrt-* / onnxruntime-gpu
+# carry `; sys_platform == 'linux'` markers, so pip skips them on Windows automatically.
+# faster-whisper isn't in CosyVoice's requirements; huggingface_hub backs our model download.
+# truststore lets the service verify TLS against the OS certificate store, so model downloads succeed
+# on networks that intercept TLS (where the bundled certifi CAs would fail cert verification).
+_TTS_SERVER_DEPS = ["faster-whisper", "huggingface_hub", "truststore"]
+_TTS_PROGRESS_FILE = "install-progress.txt"   # written by the installer, read by /api/tts/status
+_TTS_SENTINEL_FILE = ".tts_installed"          # written on success
 
 
 def _tts_venv_python(install_dir):
@@ -294,147 +300,240 @@ def _tts_venv_python(install_dir):
     return None
 
 
-def _pip_tolerant(py, args, trusted, emit):
-    """pip install that logs+continues on failure (for optional/fragile deps)."""
-    try:
-        pip(py, args, trusted)
-        return True
-    except subprocess.CalledProcessError as e:
-        emit("deps", f"(optional) skipped: {' '.join(args)} -> {e}")
-        return False
+def write_tts_install_script(install_dir):
+    """Write a readable install_voice_engine.bat into `install_dir` and return its path.
+
+    The script (run in a visible terminal, NOT as an in-app subprocess) locates Python 3.10, clones
+    CosyVoice pristine, creates an isolated venv, runs CosyVoice's own `pip install -r requirements.txt`
+    (with PIP_CONSTRAINT=setuptools<81 for the openai-whisper build), installs our service deps, and
+    downloads the CosyVoice 3 + Whisper models. It writes coarse `stage|pct|message` lines to
+    install-progress.txt so the UI can render a progress bar, and a sentinel file on success.
+    """
+    settings = load_settings()
+    tts = settings.get("tts", {})
+    install_dir = os.path.abspath(install_dir)
+    cosy_dir = os.path.join(install_dir, "CosyVoice")
+    models_dir = os.path.join(install_dir, "models")
+    model_dir = os.path.join(models_dir, tts.get("model_dirname", "Fun-CosyVoice3-0.5B"))
+    hf_cache = os.path.join(install_dir, "hf_cache")
+    progress_file = os.path.join(install_dir, _TTS_PROGRESS_FILE)
+    sentinel = os.path.join(install_dir, _TTS_SENTINEL_FILE)
+    constraints = os.path.join(install_dir, "pip-constraints.txt")
+    os.makedirs(models_dir, exist_ok=True)
+    os.makedirs(hf_cache, exist_ok=True)
+
+    repo = tts.get("repo", "https://github.com/FunAudioLLM/CosyVoice")
+    commit = (tts.get("commit") or "").strip()
+    model_repo = tts.get("model_repo", "FunAudioLLM/Fun-CosyVoice3-0.5B-2512")
+    whisper_model = tts.get("whisper_model", "base")
+    mirror = tts.get("mirror", "https://mirrors.aliyun.com/pypi/simple/")
+    trusted_host = tts.get("trusted_host", "mirrors.aliyun.com")
+    gpu_index = tts.get("gpu_index", "https://download.pytorch.org/whl/cu128")
+    # Pin the GPU torch build: 2.7.x supports newer GPUs (Blackwell/sm_120) via cu128 AND still ships
+    # torchaudio's soundfile backend. torchaudio >= 2.9 drops it for torchcodec (needs FFmpeg DLLs,
+    # poor on Windows), which breaks CosyVoice's audio I/O — so do NOT just --upgrade to latest.
+    gpu_packages = tts.get("gpu_packages", "torch==2.7.1 torchaudio==2.7.1")
+    server_deps = " ".join(_TTS_SERVER_DEPS)
+    # Optional per-machine override: a Python 3.10 interpreter (e.g. a conda env's python.exe that the
+    # `py` launcher can't see). Baked in as the first choice; must be a space-free path if set.
+    py_pref = (tts.get("python310") or "").strip()
+
+    if commit:
+        commit_block = (
+            'if exist "%COSY_DIR%\\.git" (\n'
+            '  pushd "%COSY_DIR%"\n'
+            f'  git fetch --depth 1 origin {commit}\n'
+            f'  git checkout {commit}\n'
+            '  git submodule update --init --recursive\n'
+            '  popd\n'
+            ')\n'
+        )
+    else:
+        commit_block = "REM (no pinned commit configured)\n"
+
+    script = f"""@echo off
+setlocal EnableExtensions EnableDelayedExpansion
+title Voice engine installer (CosyVoice 3)
+
+set "INSTALL_DIR={install_dir}"
+set "COSY_DIR={cosy_dir}"
+set "MODEL_DIR={model_dir}"
+set "HF_CACHE={hf_cache}"
+set "PROGRESS_FILE={progress_file}"
+set "SENTINEL={sentinel}"
+set "CONSTRAINTS={constraints}"
+set "REPO={repo}"
+set "MODEL_REPO={model_repo}"
+set "WHISPER_MODEL={whisper_model}"
+set "MIRROR={mirror}"
+set "TRUSTED_HOST={trusted_host}"
+set "GPU_INDEX={gpu_index}"
+set "GPU_PACKAGES={gpu_packages}"
+
+echo ============================================================
+echo   AIVideoBuilder - Voice engine (CosyVoice 3) installer
+echo   Install location: %INSTALL_DIR%
+echo ============================================================
+echo.
+call :progress start 0 "Starting voice engine install..."
+
+REM ---- 1) locate Python 3.10 (CosyVoice requires 3.10) ----
+call :progress python 5 "Locating Python 3.10..."
+set "PY310={py_pref}"
+if not defined PY310 (
+  py -3.10 --version >nul 2>&1 && set "PY310=py -3.10"
+)
+if not defined PY310 (
+  where python3.10 >nul 2>&1 && set "PY310=python3.10"
+)
+if not defined PY310 (
+  for /f "tokens=2 delims= " %%v in ('python --version 2^>^&1') do echo %%v| findstr /b /c:"3.10" >nul && set "PY310=python"
+)
+if not defined PY310 (
+  call :progress error 5 "Python 3.10 not found - install it from python.org and re-run."
+  echo.
+  echo [ERROR] Python 3.10 was not found on this machine.
+  echo         CosyVoice requires Python 3.10. Install it from
+  echo         https://www.python.org/downloads/release/python-31011/
+  echo         Tick "Add python.exe to PATH", then re-run this installer.
+  goto :fail
+)
+for /f "delims=" %%v in ('%PY310% --version 2^>^&1') do echo Using %%v
+
+REM ---- 2) clone CosyVoice (pristine) ----
+if exist "%COSY_DIR%\\cosyvoice\\cli\\cosyvoice.py" (
+  echo CosyVoice source already present, skipping clone.
+) else (
+  call :progress clone 10 "Downloading CosyVoice source..."
+  git clone --recursive --depth 1 "%REPO%" "%COSY_DIR%"
+  if errorlevel 1 goto :fail
+)
+{commit_block}
+REM ---- 3) create isolated venv ----
+set "VENV_PY=%INSTALL_DIR%\\python\\Scripts\\python.exe"
+if exist "%VENV_PY%" (
+  echo Python environment already exists, skipping.
+) else (
+  call :progress venv 20 "Creating isolated Python environment..."
+  %PY310% -m venv "%INSTALL_DIR%\\python"
+  if errorlevel 1 goto :fail
+)
+if not exist "%VENV_PY%" goto :fail
+
+REM ---- 4) upgrade pip ----
+call :progress deps 25 "Upgrading pip..."
+"%VENV_PY%" -m pip install --upgrade pip
+if errorlevel 1 goto :fail
+
+REM ---- 5) install CosyVoice requirements (CosyVoice's official command) ----
+REM Pin setuptools<81 for the build so openai-whisper's setup.py (imports pkg_resources,
+REM removed from setuptools>=81) can build. PIP_CONSTRAINT applies to build-isolation envs too.
+>"%CONSTRAINTS%" echo setuptools^<81
+set "PIP_CONSTRAINT=%CONSTRAINTS%"
+call :progress deps 40 "Installing CosyVoice requirements (this can take a while)..."
+"%VENV_PY%" -m pip install -r "%COSY_DIR%\\requirements.txt" -i %MIRROR% --trusted-host=%TRUSTED_HOST%
+if errorlevel 1 goto :fail
+set "PIP_CONSTRAINT="
+
+REM ---- 6) service deps (faster-whisper + huggingface_hub) ----
+call :progress deps 60 "Installing speech-recognition dependencies..."
+"%VENV_PY%" -m pip install {server_deps} -i %MIRROR% --trusted-host=%TRUSTED_HOST%
+if errorlevel 1 goto :fail
+
+REM ---- 6b) GPU acceleration for newer GPUs ----
+REM CosyVoice pins torch cu121, which has no kernels for RTX 50-series (Blackwell / sm_120) and
+REM similar newer cards. If such a GPU is present, reinstall torch/torchaudio from the cu128 index so
+REM synthesis runs on the GPU instead of falling back to CPU. Detected by comparing the GPU's compute
+REM capability against the arch list the installed torch was built for. Non-fatal: CPU still works.
+call :progress gpu 66 "Checking GPU compatibility..."
+"%VENV_PY%" -c "import torch,sys; sys.exit(0 if (torch.cuda.is_available() and ('sm_%%d%%d' %% torch.cuda.get_device_capability(0)) not in torch.cuda.get_arch_list()) else 1)"
+if not errorlevel 1 (
+  call :progress gpu 68 "Newer GPU detected - installing CUDA PyTorch for acceleration..."
+  echo Installing GPU PyTorch (%GPU_PACKAGES%) from %GPU_INDEX% ...
+  "%VENV_PY%" -m pip install %GPU_PACKAGES% --index-url %GPU_INDEX%
+  if errorlevel 1 echo [warning] GPU PyTorch install failed; the engine will run on CPU.
+) else (
+  echo GPU either already supported by the installed PyTorch, or no CUDA GPU present.
+)
+
+REM ---- 7) download CosyVoice 3 model ----
+call :progress model 70 "Downloading CosyVoice 3 model (~2 GB)..."
+"%VENV_PY%" -c "import os; os.environ['HF_HOME']=r'%HF_CACHE%'; from huggingface_hub import snapshot_download; snapshot_download('%MODEL_REPO%', local_dir=r'%MODEL_DIR%')"
+if errorlevel 1 goto :fail
+
+REM ---- 8) pre-fetch Whisper model (non-fatal) ----
+call :progress whisper 90 "Fetching speech-recognition model..."
+"%VENV_PY%" -c "import os; os.environ['HF_HOME']=r'%HF_CACHE%'; from faster_whisper import WhisperModel; WhisperModel('%WHISPER_MODEL%', device='cpu', compute_type='int8')"
+if errorlevel 1 echo [warning] could not pre-fetch the Whisper model; it will download on first use.
+
+REM ---- done ----
+>"%SENTINEL%" echo installed
+call :progress done 100 "Voice engine ready."
+echo.
+echo ============================================================
+echo   Voice engine installed successfully.
+echo   You can close this window - the app will detect it shortly.
+echo ============================================================
+pause
+exit /b 0
+
+:fail
+echo.
+echo ============================================================
+echo   Voice engine install FAILED. See the messages above.
+echo ============================================================
+if not exist "%SENTINEL%" call :progress error 0 "Install failed - see the terminal window."
+pause
+exit /b 1
+
+:progress
+>"%PROGRESS_FILE%" echo %~1^|%~2^|%~3
+goto :eof
+"""
+    script_path = os.path.join(install_dir, "install_voice_engine.bat")
+    with open(script_path, "w", encoding="ascii", errors="replace", newline="\r\n") as f:
+        f.write(script)
+    return script_path
 
 
-def _filtered_requirements(src_req, dst_req):
-    """Copy CosyVoice's requirements.txt minus Windows-hostile / substituted lines."""
-    kept = []
-    with open(src_req, "r", encoding="utf-8") as f:
-        for raw in f:
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            name = line.split("==")[0].split(">=")[0].split("<")[0].split("[")[0].strip().lower()
-            if name in _TTS_REQ_SKIP:
-                continue
-            if name in ("onnxruntime-gpu",):
-                line = "onnxruntime"
-            kept.append(line)
-    with open(dst_req, "w", encoding="utf-8") as f:
-        f.write("\n".join(kept) + "\n")
-    return kept
+def _launch_in_new_console(script_path):
+    """Open `script_path` in its own visible terminal window and return immediately."""
+    if os.name == "nt":
+        os.startfile(script_path)  # opens a new console; the script's `pause` keeps it visible
+    else:  # dev fallback on non-Windows
+        subprocess.Popen(["sh", script_path])
 
 
 def setup_tts(install_dir=None, progress_cb=None):
-    """Provision the isolated CosyVoice 3 voice engine. Opt-in and idempotent.
+    """Launch the voice-engine installer in a new terminal window. Returns (ok, message).
 
-    Creates a private venv + a pristine CosyVoice clone + models under `install_dir` (user-chosen),
-    fully separate from the ComfyUI engine. `progress_cb(dict)` receives coarse stage updates.
-    Returns (ok, message).
+    This no longer installs anything in-process: it writes install_voice_engine.bat into `install_dir`
+    and opens it in a visible console the user can watch. Completion/progress are observed via the
+    install-progress.txt / .tts_installed files that the script writes (see /api/tts/status).
+    `progress_cb` is accepted for backward compatibility but unused.
     """
     settings = load_settings()
-    setup = settings.get("setup", {})
     tts = settings.get("tts", {})
-    trusted = setup.get("pip_trusted_hosts", [])
 
     if not install_dir:
         d = tts.get("install_dir", "tts_engine")
         install_dir = d if os.path.isabs(d) else os.path.join(ROOT, d)
     install_dir = os.path.abspath(install_dir)
 
-    def emit(stage, message="", pct=None):
-        log(f"[tts] {stage}: {message}")
-        if progress_cb:
-            progress_cb({"stage": stage, "message": message, "pct": pct})
-
     try:
         os.makedirs(install_dir, exist_ok=True)
-        cosy_dir = os.path.join(install_dir, "CosyVoice")
-        models_dir = os.path.join(install_dir, "models")
-        model_dir = os.path.join(models_dir, tts.get("model_dirname", "Fun-CosyVoice3-0.5B"))
-        hf_cache = os.path.join(install_dir, "hf_cache")
-        os.makedirs(models_dir, exist_ok=True)
-        os.makedirs(hf_cache, exist_ok=True)
-
-        # 1) clone CosyVoice (pristine, with submodules for Matcha-TTS)
-        if not os.path.isfile(os.path.join(cosy_dir, "cosyvoice", "cli", "cosyvoice.py")):
-            emit("clone", "Downloading CosyVoice (pristine)…")
-            run(["git", "clone", "--recursive", "--depth", "1",
-                 tts.get("repo", "https://github.com/FunAudioLLM/CosyVoice"), cosy_dir])
-            if tts.get("commit"):
-                run(["git", "fetch", "--depth", "1", "origin", tts["commit"]], cwd=cosy_dir)
-                run(["git", "checkout", tts["commit"]], cwd=cosy_dir)
-                run(["git", "submodule", "update", "--init", "--recursive"], cwd=cosy_dir)
-        else:
-            emit("clone", "CosyVoice source present.")
-
-        # 2) isolated venv
-        py = _tts_venv_python(install_dir)
-        if not py:
-            emit("env", "Creating isolated Python environment…")
-            base = setup.get("base_python") or sys.executable
-            run([base, "-m", "venv", os.path.join(install_dir, "python")])
-            py = _tts_venv_python(install_dir)
-        if not py:
-            return False, "Failed to create the voice engine's Python environment."
-
-        # 3) dependencies
-        pip(py, ["--upgrade", "pip"], trusted)
-        if setup.get("auto_install_torch", True) and not _module_present(py, "torch"):
-            emit("deps", "Installing PyTorch (CUDA)…")
-            pip(py, ["torch", "torchaudio", "--index-url", setup["torch_index_url"]], trusted)
-
-        req = os.path.join(cosy_dir, "requirements.txt")
-        if os.path.isfile(req):
-            emit("deps", "Installing CosyVoice requirements…")
-            filtered = os.path.join(install_dir, "requirements.filtered.txt")
-            _filtered_requirements(req, filtered)
-            # Tolerant: if the batch install trips on one package, fall back to line-by-line so a
-            # single bad pin doesn't abort the whole voice install.
-            if not _pip_tolerant(py, ["-r", filtered], trusted, emit):
-                for line in open(filtered, encoding="utf-8").read().splitlines():
-                    if line.strip():
-                        _pip_tolerant(py, [line.strip()], trusted, emit)
-
-        emit("deps", "Installing Whisper + service dependencies…")
-        pip(py, _TTS_SERVER_DEPS, trusted)
-
-        emit("deps", "Installing text normalization (optional)…")
-        for pkg in _TTS_OPTIONAL_FRONTEND:
-            _pip_tolerant(py, [pkg], trusted, emit)
-
-        # 4) models — downloaded straight into our install_dir (never a hardcoded default location)
-        if not os.path.isdir(model_dir) or not os.listdir(model_dir):
-            emit("model", "Downloading CosyVoice 3 model (~2 GB)…")
-            dl = (
-                "import os;os.environ['HF_HOME']=%r;"
-                "from huggingface_hub import snapshot_download;"
-                "snapshot_download(%r, local_dir=%r)"
-                % (hf_cache, tts.get("model_repo", "FunAudioLLM/Fun-CosyVoice3-0.5B-2512"), model_dir)
-            )
-            run([py, "-c", dl])
-        else:
-            emit("model", "CosyVoice 3 model present.")
-
-        emit("whisper", "Fetching speech-recognition model…")
-        wsize = tts.get("whisper_model", "base")
-        wdl = (
-            "import os;os.environ['HF_HOME']=%r;"
-            "from faster_whisper import WhisperModel;"
-            "WhisperModel(%r, device='cpu', compute_type='int8')"
-            % (hf_cache, wsize)
-        )
+        # Clear any stale progress marker so the UI reflects THIS run, not a previous one.
         try:
-            run([py, "-c", wdl])
-        except subprocess.CalledProcessError as e:
-            emit("whisper", f"(warning) could not pre-fetch Whisper model: {e}")
-
-        emit("done", "Voice engine ready.")
-        return True, "Voice engine installed."
-    except subprocess.CalledProcessError as e:
-        emit("error", f"Setup command failed: {e}")
-        return False, f"Voice engine setup failed: {e}"
+            os.remove(os.path.join(install_dir, _TTS_PROGRESS_FILE))
+        except OSError:
+            pass
+        script_path = write_tts_install_script(install_dir)
+        _launch_in_new_console(script_path)
     except Exception as e:
-        emit("error", str(e))
-        return False, f"Voice engine setup failed: {e}"
+        log(f"[tts] failed to launch installer: {e}")
+        return False, f"Could not launch the voice engine installer: {e}"
+
+    return True, "Installer launched in a new terminal window."
 
 
 # ------------------------------- main -------------------------------

@@ -20,6 +20,7 @@ Endpoints (all localhost, JSON in/out; audio is exchanged as file paths on the s
 """
 import argparse
 import os
+import subprocess
 import sys
 import threading
 import traceback
@@ -62,9 +63,11 @@ def _load_cosyvoice():
         _prepare_cosyvoice_import()
         # CosyVoice 3 exposes an AutoModel facade that picks the right model class from model_dir.
         from cosyvoice.cli.cosyvoice import AutoModel  # noqa: E402  (path set up above)
-        # fp16 halves VRAM but not every model class accepts the kwarg; fall back cleanly.
+        # fp16 halves VRAM on GPU but is pointless/unsupported on CPU; also not every model class
+        # accepts the kwarg, so fall back cleanly.
+        fp16 = CFG["device"] == "cuda"
         try:
-            cosy = AutoModel(model_dir=CFG["model_dir"], fp16=True)
+            cosy = AutoModel(model_dir=CFG["model_dir"], fp16=fp16)
         except TypeError:
             cosy = AutoModel(model_dir=CFG["model_dir"])
         _state["cosy"] = cosy
@@ -95,13 +98,6 @@ def _load_whisper():
         return _state["whisper"]
 
 
-def _load_prompt_speech(path):
-    """Load a reference clip as the 16 kHz tensor CosyVoice expects for cloning."""
-    _prepare_cosyvoice_import()
-    from cosyvoice.utils.file_utils import load_wav  # noqa: E402
-    return load_wav(path, 16000)
-
-
 def _collect(generator):
     """Concatenate the streamed 'tts_speech' chunks CosyVoice yields into one waveform."""
     import torch
@@ -124,8 +120,12 @@ def health():
 
 
 @app.post("/synthesize")
-async def synthesize(req: dict):
+def synthesize(req: dict):
     """Generate speech to `out_path` (a WAV on the shared disk).
+
+    Declared as a sync `def` on purpose: CosyVoice inference is a long, blocking CPU/GPU call, so
+    FastAPI runs this in its worker threadpool and the event loop stays free to answer /health
+    (otherwise a long synth would make the service look dead and trigger a duplicate spawn).
 
     Body:
         text       (str, required)  the dialog to speak
@@ -158,15 +158,31 @@ async def synthesize(req: dict):
             if not ref_audio or not os.path.isfile(ref_audio):
                 return JSONResponse({"ok": False, "error": "ref_audio (a reference speaker clip) is required for cloning"},
                                     status_code=400)
-            prompt_speech = _load_prompt_speech(ref_audio)
+            # CosyVoice 3 takes the reference clip as a file PATH and loads it internally (unlike
+            # CosyVoice 1/2, which took a pre-loaded 16 kHz tensor). Pass the path straight through.
+            # CosyVoice 3 also requires the prompt to carry a <|endofprompt|> delimiter; the caller
+            # must add it (see the model's own runtime wrapper), otherwise the LLM emits no tokens.
             instruct = (req.get("instruct") or "").strip()
             if instruct:
                 # Clone the reference voice AND steer tone/emotion/dialect via a natural-language instruction.
-                gen = cosy.inference_instruct2(text, instruct, prompt_speech, stream=False, speed=speed)
+                if "<|endofprompt|>" not in instruct:
+                    instruct = f"You are a helpful assistant. {instruct}<|endofprompt|>"
+                gen = cosy.inference_instruct2(text, instruct, ref_audio, stream=False, speed=speed)
             else:
-                # Pure zero-shot clone; needs the transcript of the reference clip.
+                # Pure zero-shot clone; needs the transcript of the reference clip. Without a real
+                # prompt_text the model has no anchor and produces garbled / wrong-language speech (and
+                # an empty one hard-crashes with a Kernel-size error), so require it up front with a
+                # clear message instead of a cryptic 500.
                 ref_text = (req.get("ref_text") or "").strip()
-                gen = cosy.inference_zero_shot(text, ref_text, prompt_speech, stream=False, speed=speed)
+                if not ref_text:
+                    return JSONResponse(
+                        {"ok": False, "error": "This clip needs its transcript (what the reference "
+                                               "says) to clone the voice. Fill it in, or add a Tone "
+                                               "instruction to guide the delivery instead."},
+                        status_code=400)
+                if "<|endofprompt|>" not in ref_text:
+                    ref_text = f"You are a helpful assistant.<|endofprompt|>{ref_text}"
+                gen = cosy.inference_zero_shot(text, ref_text, ref_audio, stream=False, speed=speed)
 
         wav = _collect(gen)
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -179,8 +195,11 @@ async def synthesize(req: dict):
 
 
 @app.post("/transcribe")
-async def transcribe(req: dict):
-    """Transcribe a reference clip so the user can review/edit it before cloning."""
+def transcribe(req: dict):
+    """Transcribe a reference clip so the user can review/edit it before cloning.
+
+    Sync `def` for the same reason as /synthesize: Whisper transcription blocks, so it runs in the
+    threadpool rather than stalling the event loop (and /health)."""
     try:
         audio = req.get("audio")
         if not audio or not os.path.isfile(audio):
@@ -195,6 +214,49 @@ async def transcribe(req: dict):
         return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"}, status_code=500)
 
 
+def _detect_device(requested):
+    """Return 'cuda' only if the installed torch actually has compiled kernels for this GPU's
+    compute capability; otherwise 'cpu'. CosyVoice's pinned torch (cu121) predates newer GPU
+    architectures (e.g. Blackwell / sm_120 on RTX 50-series), where CUDA is "available" but every
+    kernel launch fails with "no kernel image is available for execution on the device". We run the
+    probe in a short subprocess so THIS process never initializes a CUDA context — that lets main()
+    hide an incompatible GPU via CUDA_VISIBLE_DEVICES before torch is imported here."""
+    if requested == "cpu":
+        return "cpu"
+    probe = (
+        "import torch\n"
+        "try:\n"
+        "    assert torch.cuda.is_available()\n"
+        "    sm = 'sm_%d%d' % torch.cuda.get_device_capability(0)\n"
+        "    print('cuda' if sm in torch.cuda.get_arch_list() else 'cpu')\n"
+        "except Exception:\n"
+        "    print('cpu')\n"
+    )
+    try:
+        out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=120)
+        lines = [ln.strip() for ln in (out.stdout or "").splitlines() if ln.strip()]
+        return "cuda" if lines and lines[-1] == "cuda" else "cpu"
+    except Exception:
+        return "cpu"
+
+
+def _init_downloads(model_dir):
+    """Make runtime model downloads (CosyVoice's `wetext` text normalizer, pulled from modelscope on
+    first use) work and stay local. Called before any HTTPS happens."""
+    # Verify TLS against the OS trust store, which includes corporate/TLS-intercepting proxy CAs that
+    # the bundled certifi bundle doesn't — otherwise the wetext download fails cert verification and
+    # text normalization silently degrades. Non-fatal if truststore isn't installed.
+    try:
+        import truststore
+        truststore.inject_into_ssl()
+    except Exception as e:
+        print(f"[tts] truststore unavailable ({e}); TLS uses bundled CAs.", flush=True)
+    # Keep the modelscope cache inside the install dir (…/models/<model> -> install root) rather than
+    # the user profile, so everything the voice engine downloads lives under one folder.
+    install_dir = os.path.dirname(os.path.dirname(os.path.abspath(model_dir)))
+    os.environ.setdefault("MODELSCOPE_CACHE", os.path.join(install_dir, "modelscope_cache"))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
@@ -204,11 +266,20 @@ def main():
     ap.add_argument("--whisper-model", default="base")
     ap.add_argument("--device", default="cuda")
     args = ap.parse_args()
+    _init_downloads(args.model_dir)
+    device = _detect_device(args.device)
+    if device == "cpu":
+        # Hide the GPU BEFORE torch/cosyvoice are imported (they load lazily on first request), so
+        # CosyVoice's internal `torch.cuda.is_available()` sees no device and runs on CPU cleanly.
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+        if args.device != "cpu":
+            print("[tts] No CUDA GPU compatible with the installed PyTorch; running on CPU "
+                  "(synthesis will be slower).", flush=True)
     CFG.update({
         "cosyvoice_dir": os.path.abspath(args.cosyvoice_dir),
         "model_dir": os.path.abspath(args.model_dir),
         "whisper_model": args.whisper_model,
-        "device": args.device,
+        "device": device,
     })
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 

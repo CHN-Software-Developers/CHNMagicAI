@@ -121,7 +121,6 @@ hub = Hub()
 settings = load_settings()
 comfy = comfy_client.ComfyClient(settings["comfy_host"], settings["comfy_port"])
 tts_svc = tts_mod.TtsService(settings)
-_tts_setup = {"running": False}
 # Tracks the in-flight prompt. `errored` is set when ComfyUI reports an execution_error for it,
 # so the trailing `executing {node: null}` (which ComfyUI sends even after a failure) is not
 # mistaken for a successful completion.
@@ -367,6 +366,14 @@ async def api_generate(req: Request):
     if not model_mgr.all_required_present(os.path.join(ROOT, settings["models_dir"]), settings):
         return JSONResponse({"error": "Some required models are missing. Open the Models panel."},
                             status_code=400)
+    # Free the voice engine (and its GPU memory) before video generation so the audio model doesn't
+    # hold VRAM while the LTX/ComfyUI engine runs — the QA machine saw video gen slow down when the
+    # CosyVoice subprocess lingered. stop() is a no-op if the engine isn't running; it reloads lazily
+    # on the next synthesize call.
+    try:
+        await asyncio.get_event_loop().run_in_executor(None, tts_svc.stop)
+    except Exception:
+        pass
     prompt, seed = wf.build_prompt(params, settings)
     async with aiohttp.ClientSession() as session:
         prompt_id = await comfy.queue_prompt(session, prompt)
@@ -395,7 +402,6 @@ async def api_media(filename: str, subfolder: str = "", type: str = "output"):
 @app.get("/api/tts/status")
 async def api_tts_status():
     status = await tts_svc.status()
-    status["setup_running"] = _tts_setup["running"]
     status["languages"] = settings.get("tts", {}).get("languages", [])
     return status
 
@@ -418,28 +424,12 @@ async def api_tts_setup(req: Request):
     if install_dir:
         settings.setdefault("tts", {})["install_dir"] = install_dir
         save_local_tts_dir(install_dir)
-    if _tts_setup["running"]:
-        return {"started": False, "message": "Voice engine setup is already running."}
-    loop = asyncio.get_event_loop()
-
-    def cb(d):
-        loop.call_soon_threadsafe(asyncio.ensure_future,
-                                  hub.broadcast({"type": "tts_setup", **d}))
-
-    async def run():
-        _tts_setup["running"] = True
-        await hub.broadcast({"type": "tts_setup", "stage": "start", "message": "Starting voice engine setup…"})
-        try:
-            ok, message = await loop.run_in_executor(
-                None, lambda: bootstrap.setup_tts(install_dir or None, cb))
-        except Exception as e:  # never let setup crash the app
-            ok, message = False, f"{type(e).__name__}: {e}"
-        _tts_setup["running"] = False
-        await hub.broadcast({"type": "tts_setup", "stage": "done" if ok else "error",
-                             "message": message, "ok": ok})
-
-    asyncio.create_task(run())
-    return {"started": True}
+    # No in-app install subprocess: write the installer script and open it in a visible terminal the
+    # user can watch. The app observes progress/completion via the install-progress.txt / .tts_installed
+    # files that the script writes (surfaced by /api/tts/status), so we return immediately.
+    ok, message = await asyncio.get_event_loop().run_in_executor(
+        None, lambda: bootstrap.setup_tts(install_dir or None))
+    return {"launched": bool(ok), "message": message}
 
 
 @app.post("/api/tts/transcribe")

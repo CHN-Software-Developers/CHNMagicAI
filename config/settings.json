@@ -103,8 +103,12 @@
     "model_repo": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
     "model_dirname": "Fun-CosyVoice3-0.5B",
     "whisper_model": "base",
+    "mirror": "https://mirrors.aliyun.com/pypi/simple/",
+    "trusted_host": "mirrors.aliyun.com",
+    "gpu_index": "https://download.pytorch.org/whl/cu128",
+    "python310": "",
     "startup_timeout_seconds": 300,
-    "idle_shutdown_seconds": 600,
+    "idle_shutdown_seconds": 180,
     "languages": [
       "English",
       "Chinese",

@@ -1316,67 +1316,251 @@ code {
   padding-top: 14px;
 }
 
-.tts-row {
+/* Roomier box for the two-column speech tabs */
+#audioModal .modal-box {
+  width: min(880px, 100%);
+}
+
+/* Generate-speech / Text-to-audio: two columns — inputs on the left, preview on the right */
+.tts-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
-  gap: 12px;
-  margin-top: 12px;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: 18px;
+  align-items: start;
 }
-.tts-speed {
-  min-width: 140px;
-}
-.tts-speed input[type="range"] {
-  width: 100%;
-}
-.tts-voice {
+.tts-left {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 16px;
-  margin: 16px 0 10px;
-  padding-top: 14px;
-  border-top: 1px solid var(--line);
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
 }
-.tts-voice-label {
-  font-weight: 700;
-  font-size: 13px;
+.tts-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tts-field-label {
+  font-size: 12px;
+  font-weight: 600;
   color: var(--muted);
+}
+.tts-field-label small {
+  font-weight: 400;
+  color: var(--faint);
+}
+.tts-ref-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 .tts-ref-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 10px;
+  flex-wrap: wrap;
 }
 .tts-ref-name {
   font-size: 12px;
   color: var(--muted);
   word-break: break-all;
 }
-.tts-actions {
+.tts-ref-transcript {
+  margin-top: 4px;
+}
+.tts-plain-note {
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 0;
+  line-height: 1.45;
+}
+.tts-speed {
+  gap: 8px;
+}
+.tts-speed input[type="range"] {
+  width: 100%;
+}
+.tts-generate-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-top: 14px;
+  margin-top: 2px;
+  flex-wrap: wrap;
 }
 .tts-status {
   font-size: 12px;
   color: var(--muted);
 }
-.tts-result {
-  margin-top: 16px;
-  padding-top: 14px;
+
+/* Textarea + docked chip tray share one bordered "shell" so chips read as part of the box */
+.ta-shell {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel2);
+  overflow: hidden;
+  transition: border-color 0.15s ease;
+}
+.ta-shell:focus-within {
+  border-color: var(--line2);
+}
+.ta-shell textarea {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  padding: 10px 12px;
+  resize: vertical;
+  outline: none;
+}
+.chip-tray {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
   border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+.chip-tray-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--faint);
+  margin-right: 2px;
+}
+.chip-tray .chip {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--panel2);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+.chip-tray .chip:hover {
+  background: var(--panel3);
+  border-color: var(--line2);
+}
+.chip-tray .chip:active {
+  transform: translateY(1px);
+}
+
+/* Right column: preview */
+.tts-right {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+  min-width: 0;
+  position: sticky;
+  top: 0;
 }
-.tts-result audio {
+.tts-preview-panel {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel2);
+  min-height: 190px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+.tts-preview-empty {
+  text-align: center;
+  color: var(--faint);
+}
+.tts-preview-icon {
+  font-size: 30px;
+  margin-bottom: 8px;
+  opacity: 0.7;
+}
+.tts-preview-empty p {
+  margin: 0;
+  font-size: 13px;
+}
+.tts-preview-ready {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.tts-preview-ready audio {
   width: 100%;
 }
-.tts-result-actions {
+.tts-preview-dur {
+  font-size: 11px;
+  color: var(--faint);
+}
+.tts-right-actions {
   display: flex;
+  align-items: center;
+  justify-content: flex-end;
   gap: 10px;
+}
+
+/* Shimmer / animated wave while a clip is generating */
+.tts-shimmer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.tts-shimmer-wave {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 44px;
+}
+.tts-shimmer-wave span {
+  display: block;
+  width: 5px;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--text);
+  opacity: 0.55;
+  animation: tts-wave 1s ease-in-out infinite;
+}
+.tts-shimmer-wave span:nth-child(2) {
+  animation-delay: 0.1s;
+}
+.tts-shimmer-wave span:nth-child(3) {
+  animation-delay: 0.2s;
+}
+.tts-shimmer-wave span:nth-child(4) {
+  animation-delay: 0.3s;
+}
+.tts-shimmer-wave span:nth-child(5) {
+  animation-delay: 0.4s;
+}
+.tts-shimmer-wave span:nth-child(6) {
+  animation-delay: 0.5s;
+}
+.tts-shimmer-wave span:nth-child(7) {
+  animation-delay: 0.6s;
+}
+@keyframes tts-wave {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+.tts-shimmer-text {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
 }
 .tts-note {
   background: var(--panel2);
@@ -1430,8 +1614,36 @@ code {
   overflow-y: auto;
 }
 
-@media (max-width: 640px) {
-  .tts-row {
+/* Install button doubling as a progress bar while the external terminal installs */
+.ve-install-btn {
+  position: relative;
+  overflow: hidden;
+  min-width: 190px;
+}
+.ve-install-btn .ve-bar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  background: rgba(255, 255, 255, 0.22);
+  transition: width 0.35s ease;
+  z-index: 0;
+  pointer-events: none;
+}
+.ve-install-btn.installing {
+  border-color: var(--line2);
+}
+.ve-install-btn .ve-btn-label {
+  position: relative;
+  z-index: 1;
+}
+
+@media (max-width: 720px) {
+  .tts-grid {
     grid-template-columns: 1fr;
+  }
+  .tts-right {
+    position: static;
   }
 }

@@ -927,7 +927,9 @@ async function generate() {
     // user loaded audio clips or ticked Lip-sync; otherwise generate audio from scratch.
     use_custom_audio: hasAudioClips || lip,
     use_custom_motion: $("useMotion").checked,
-    inpaint_audio: lip ? true : $("inpaintAudio").checked,
+    // Always honor the user's explicit "Inpaint audio gaps" choice. Previously lip-sync
+    // hard-forced this true, which made the checkbox a no-op and filled the gaps regardless.
+    inpaint_audio: $("inpaintAudio").checked,
     override_audio: $("overrideAudio").checked,
     // Backend strips the CinematicAudioSeparation node chain unless this is true,
     // so the checkbox must be forwarded explicitly or the feature is a no-op.
@@ -1059,9 +1061,6 @@ function handleWS(m) {
     case "download":
       updateDownload(m);
       break;
-    case "tts_setup":
-      handleTtsSetup(m);
-      break;
   }
 }
 
@@ -1112,7 +1111,8 @@ function refreshModelBadge() {
 async function openModels() {
   state.models = await api("/api/models");
   renderModels();
-  refreshTtsStatus();
+  const s = await refreshTtsStatus();
+  if (s && s.installing) startTtsPolling(); // resume watching an install started earlier
   openModal("modelsModal");
 }
 
@@ -1208,7 +1208,9 @@ async function reloadModels() {
 // Pending (not-yet-committed) generated speech lives here so the user can preview
 // and regenerate before dropping it on the timeline. `refFile` is the uploaded
 // reference clip (relative engine-input path) used for zero-shot cloning.
-const tts = { pending: null, refFile: null, installed: false };
+// `mode` is 'clone' (Clone-a-voice tab, needs a reference clip) or 'sft' (Text-to-audio tab, the
+// engine's built-in narrator voice). The reference transcript lives in the visible #ttsRefText box.
+const tts = { pending: null, refFile: null, installed: false, mode: "clone" };
 
 function openAudioModal() {
   switchAudioTab("upload");
@@ -1217,17 +1219,26 @@ function openAudioModal() {
 }
 
 function switchAudioTab(name) {
+  // Both speech tabs ('speak' = clone, 'tts' = text-to-audio) share one pane; only the input mode
+  // and the reference block differ.
+  const pane = name === "tts" ? "speak" : name;
   document
     .querySelectorAll("#audioTabs .tab")
     .forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
   document
     .querySelectorAll("#audioModal .tab-pane")
-    .forEach((p) => p.classList.toggle("hidden", p.dataset.pane !== name));
+    .forEach((p) => p.classList.toggle("hidden", p.dataset.pane !== pane));
+  if (pane !== "speak") return;
+  tts.mode = name === "tts" ? "sft" : "clone";
+  $("ttsRefBlock").classList.toggle("hidden", tts.mode !== "clone");
+  $("ttsPlainNote").classList.toggle("hidden", tts.mode !== "sft");
+  resetTtsPreview();
+  refreshTtsStatus();
 }
 
 function populateTtsLangs(langs) {
   const sel = $("ttsLang");
-  if (sel.options.length) return; // populate once
+  if (!sel || sel.options.length) return; // populate once
   (langs && langs.length ? langs : ["English"]).forEach((l) => {
     const o = document.createElement("option");
     o.value = l;
@@ -1247,47 +1258,77 @@ async function refreshTtsStatus() {
   populateTtsLangs(s && s.languages);
   $("ttsUnavailable").classList.toggle("hidden", tts.installed);
   $("ttsForm").classList.toggle("hidden", !tts.installed);
-  const hasPreset = !!(s && s.available_spks && s.available_spks.length);
-  $("ttsPresetWrap").classList.toggle("hidden", !hasPreset);
   updateEngineStatus(s);
   return s;
 }
 
 function updateEngineStatus(s) {
   const el = $("ttsEngineStatus");
+  const btn = $("ttsInstallBtn");
+  const bar = $("ttsInstallBar");
+  const label = $("ttsInstallLabel");
+  const caption = $("ttsSetupLog");
   if (!el) return;
   if (!s) {
     el.textContent = "Status unavailable.";
     return;
   }
-  if (s.setup_running) {
+  const prog = s.install_progress;
+
+  if (s.installing) {
+    const pct = prog && typeof prog.pct === "number" ? prog.pct : 0;
+    const stage = prog && prog.stage ? prog.stage : "";
+    if (btn) btn.disabled = true;
+    if (btn) btn.classList.add("installing");
+    if (bar) bar.style.width = pct + "%";
+    if (label)
+      label.textContent = `Installing… ${stage ? stage + " " : ""}(${pct}%)`;
+    if (caption) {
+      caption.classList.remove("hidden");
+      caption.textContent =
+        (prog && prog.message) ||
+        "A terminal window is running the install — watch it for full logs.";
+    }
     el.textContent = "Installing…";
-    $("ttsInstallBtn").disabled = true;
     return;
   }
-  $("ttsInstallBtn").disabled = false;
-  el.textContent = s.installed
-    ? `Installed ✓  (${s.install_dir})${s.running ? " · running" : ""}`
-    : "Not installed.";
+
+  if (btn) btn.classList.remove("installing");
+  if (btn) btn.disabled = false;
+
+  if (s.installed) {
+    if (bar) bar.style.width = "100%";
+    if (label) label.textContent = "Reinstall / repair";
+    if (caption) caption.classList.add("hidden");
+    el.textContent = `Installed ✓  (${s.install_dir})${s.running ? " · running" : ""}`;
+  } else if (prog && prog.stage === "error") {
+    if (bar) bar.style.width = "0";
+    if (label) label.textContent = "Install failed — retry";
+    if (caption) {
+      caption.classList.remove("hidden");
+      caption.textContent = `${prog.message || "Install failed"} (see the terminal window).`;
+    }
+    el.textContent = "Install failed.";
+  } else {
+    if (bar) bar.style.width = "0";
+    if (label) label.textContent = "Install voice engine";
+    if (caption) caption.classList.add("hidden");
+    el.textContent = "Not installed.";
+  }
   const dir = $("ttsInstallDir");
   if (dir && !dir.value && s.install_dir) dir.placeholder = s.install_dir;
-}
-
-function currentVoiceMode() {
-  const r = document.querySelector('input[name="ttsVoice"]:checked');
-  return r ? r.value : "clone";
-}
-
-function syncVoiceMode() {
-  $("ttsCloneArea").classList.toggle("hidden", currentVoiceMode() !== "clone");
 }
 
 function pickRefVoice() {
   uploadMedia("audio", async (res) => {
     tts.refFile = res.file;
     $("ttsRefName").textContent = res.name;
+    // Auto-fill the transcript, but keep it VISIBLE and editable: the model clones the voice USING
+    // this text, so a wrong/missing transcript (e.g. a clip in another language) garbles the output.
+    // The user needs to see and fix it — removing this box is exactly what broke cloning.
     $("ttsRefText").value = "";
-    $("ttsStatus").textContent = "Transcribing reference…";
+    $("ttsRefText").placeholder = "Transcribing…";
+    $("ttsStatus").textContent = "Analyzing reference…";
     try {
       const t = await api("/api/tts/transcribe", {
         method: "POST",
@@ -1297,11 +1338,50 @@ function pickRefVoice() {
       $("ttsRefText").value = t.ok ? t.text || "" : "";
       $("ttsStatus").textContent = t.ok
         ? ""
-        : t.error || "Couldn't transcribe — type it below.";
+        : "Couldn't auto-transcribe — type what the clip says below.";
     } catch {
-      $("ttsStatus").textContent = "Couldn't transcribe — type it below.";
+      $("ttsStatus").textContent =
+        "Couldn't auto-transcribe — type what the clip says below.";
+    } finally {
+      $("ttsRefText").placeholder = "Transcript of the reference clip…";
     }
   });
+}
+
+// Insert `text` at the textarea's caret (replacing any selection), keeping focus + caret sensible.
+function insertAtCursor(el, text) {
+  const s = el.selectionStart ?? el.value.length;
+  const e = el.selectionEnd ?? el.value.length;
+  const before = el.value.slice(0, s);
+  // add a leading space if we're mid-sentence and there isn't one already
+  const pad = before && !/\s$/.test(before) ? " " : "";
+  el.value = before + pad + text + el.value.slice(e);
+  const pos = s + pad.length + text.length;
+  el.focus();
+  el.setSelectionRange(pos, pos);
+}
+
+// Wrap the current selection with open/close tags (or insert the empty pair at the caret).
+function wrapSelection(el, open, close) {
+  const s = el.selectionStart ?? el.value.length;
+  const e = el.selectionEnd ?? el.value.length;
+  const sel = el.value.slice(s, e);
+  el.value = el.value.slice(0, s) + open + sel + close + el.value.slice(e);
+  const pos = sel ? s + open.length + sel.length + close.length : s + open.length;
+  el.focus();
+  el.setSelectionRange(pos, pos);
+}
+
+// Reset the preview column to its empty state, discarding any un-committed result.
+function resetTtsPreview() {
+  tts.pending = null;
+  $("ttsResult").classList.add("hidden");
+  $("ttsShimmer").classList.add("hidden");
+  $("ttsPreviewEmpty").classList.remove("hidden");
+  $("ttsPreview").removeAttribute("src");
+  $("ttsPreviewDur").textContent = "";
+  $("ttsRegen").classList.add("hidden");
+  $("ttsAdd").disabled = true;
 }
 
 async function ttsGenerate() {
@@ -1310,75 +1390,120 @@ async function ttsGenerate() {
     $("ttsStatus").textContent = "Enter the dialog to speak.";
     return;
   }
-  const mode = currentVoiceMode();
+  const mode = tts.mode === "sft" ? "sft" : "clone";
+  const instruct = $("ttsInstruct").value.trim();
+  const refText = $("ttsRefText").value.trim();
   if (mode === "clone" && !tts.refFile) {
-    $("ttsStatus").textContent = "Choose a reference voice clip first.";
+    $("ttsStatus").textContent = "Choose a reference clip first.";
+    return;
+  }
+  // Cloning without a tone/instruction uses zero-shot, which REQUIRES the reference transcript —
+  // an empty one makes the model produce garbled/foreign-sounding speech. Block it with a clear nudge.
+  if (mode === "clone" && !instruct && !refText) {
+    $("ttsStatus").textContent =
+      "Add what the reference clip says (the box above) — it's needed to clone the voice.";
+    $("ttsRefText").focus();
     return;
   }
   const body = {
     text,
     mode,
-    instruct: $("ttsInstruct").value.trim(),
-    ref_text: $("ttsRefText").value.trim(),
+    instruct,
+    ref_text: refText,
     ref_file: tts.refFile,
     speed: parseFloat($("ttsSpeed").value) || 1.0,
   };
+  // Enter the generating state: clear any previous result from the preview and show the shimmer.
+  tts.pending = null;
+  $("ttsPreviewEmpty").classList.add("hidden");
+  $("ttsResult").classList.add("hidden");
+  $("ttsRegen").classList.add("hidden");
+  $("ttsShimmer").classList.remove("hidden");
+  $("ttsAdd").disabled = true;
   $("ttsGenerate").disabled = true;
-  $("ttsRegen").disabled = true;
   $("ttsStatus").textContent =
-    "Generating speech… (first run loads the model — please wait)";
+    "Generating… first run loads the model, please wait.";
   try {
     const res = await api("/api/tts/synthesize", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+    $("ttsShimmer").classList.add("hidden");
     if (res.ok) {
       tts.pending = res;
       $("ttsPreview").src = res.url;
+      $("ttsPreviewDur").textContent =
+        typeof res.duration === "number" ? res.duration.toFixed(1) + "s" : "";
       $("ttsResult").classList.remove("hidden");
+      $("ttsRegen").classList.remove("hidden");
+      $("ttsAdd").disabled = false;
       $("ttsStatus").textContent = "";
     } else {
+      $("ttsPreviewEmpty").classList.remove("hidden");
       $("ttsStatus").textContent = res.error || "Speech generation failed.";
     }
   } catch {
+    $("ttsShimmer").classList.add("hidden");
+    $("ttsPreviewEmpty").classList.remove("hidden");
     $("ttsStatus").textContent = "Speech generation failed.";
   } finally {
     $("ttsGenerate").disabled = false;
-    $("ttsRegen").disabled = false;
   }
 }
 
 function ttsAddToTimeline() {
   if (!tts.pending) return;
   addMediaClip("audio", tts.pending); // adds as a voice clip (voice=true)
-  tts.pending = null;
-  $("ttsResult").classList.add("hidden");
-  $("ttsPreview").removeAttribute("src");
+  resetTtsPreview();
   closeModal("audioModal");
 }
 
 async function installVoiceEngine() {
   const dir = $("ttsInstallDir").value.trim();
   $("ttsInstallBtn").disabled = true;
-  $("ttsSetupLog").classList.remove("hidden");
-  $("ttsSetupLog").textContent = "Starting…";
-  await api("/api/tts/setup", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(dir ? { install_dir: dir } : {}),
-  });
+  const caption = $("ttsSetupLog");
+  caption.classList.remove("hidden");
+  caption.textContent = "Opening the installer terminal…";
+  let res = null;
+  try {
+    res = await api("/api/tts/setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(dir ? { install_dir: dir } : {}),
+    });
+  } catch {
+    res = null;
+  }
+  if (!res || !res.launched) {
+    caption.textContent =
+      (res && res.message) || "Could not open the installer terminal.";
+    $("ttsInstallBtn").disabled = false;
+    return;
+  }
+  caption.textContent =
+    "A terminal window is running the install — watch it for full logs.";
+  startTtsPolling();
 }
 
-function handleTtsSetup(m) {
-  const log = $("ttsSetupLog");
-  if (log) {
-    log.classList.remove("hidden");
-    log.textContent = `${m.stage ? "[" + m.stage + "] " : ""}${m.message || ""}`;
-  }
-  if (m.stage === "done" || m.stage === "error") {
-    $("ttsInstallBtn").disabled = false;
-    refreshTtsStatus();
+// Poll /api/tts/status while an install runs in the external terminal (no WS stream anymore).
+// Stops once installed or the installer reports an error; a safety cap avoids polling forever if
+// the user closes the terminal without finishing.
+let ttsPollTimer = null;
+let ttsPollLeft = 0;
+function startTtsPolling() {
+  ttsPollLeft = 900; // ~30 min at 2s/tick
+  if (ttsPollTimer) return;
+  ttsPollTimer = setInterval(async () => {
+    const s = await refreshTtsStatus();
+    const errored = s && s.install_progress && s.install_progress.stage === "error";
+    if (!s || s.installed || errored || --ttsPollLeft <= 0) stopTtsPolling();
+  }, 2000);
+}
+function stopTtsPolling() {
+  if (ttsPollTimer) {
+    clearInterval(ttsPollTimer);
+    ttsPollTimer = null;
   }
 }
 
@@ -1461,8 +1586,22 @@ function wireEvents() {
   $("ttsSpeed").addEventListener("input", (e) => {
     $("ttsSpeedVal").textContent = parseFloat(e.target.value).toFixed(1);
   });
-  document.querySelectorAll('input[name="ttsVoice"]').forEach((r) =>
-    r.addEventListener("change", syncVoiceMode),
+  // Sound-insert chips: drop a paralinguistic token at the cursor, or wrap the selection.
+  document.querySelectorAll("#ttsInserts .chip").forEach((c) =>
+    c.addEventListener("click", () => {
+      if (c.dataset.ins) insertAtCursor($("ttsText"), c.dataset.ins);
+      else if (c.dataset.wrap) {
+        const [open, close] = c.dataset.wrap.split("|");
+        wrapSelection($("ttsText"), open, close);
+      }
+    }),
+  );
+  // Mood chips: fill the (free-text) tone field.
+  document.querySelectorAll("#ttsEmotions .chip").forEach((c) =>
+    c.addEventListener("click", () => {
+      $("ttsInstruct").value = c.dataset.emo || "";
+      $("ttsInstruct").focus();
+    }),
   );
   $("generate").addEventListener("click", generate);
   $("interrupt").addEventListener("click", () =>
@@ -1470,7 +1609,10 @@ function wireEvents() {
   );
 
   $("openModels").addEventListener("click", openModels);
-  $("closeModels").addEventListener("click", () => closeModal("modelsModal"));
+  $("closeModels").addEventListener("click", () => {
+    stopTtsPolling();
+    closeModal("modelsModal");
+  });
   $("openAdvanced").addEventListener("click", () => openModal("advancedModal"));
   $("closeAdvanced").addEventListener("click", () =>
     closeModal("advancedModal"),
