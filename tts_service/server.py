@@ -5,8 +5,6 @@ unmodified CosyVoice 3 package (Apache-2.0) plus faster-whisper (MIT). The main 
 orchestrator talks to this service over 127.0.0.1 and never imports CosyVoice itself, so
 CosyVoice's heavy / version-pinned dependency stack stays isolated from the ComfyUI/LTX engine.
 
-This file is our own code and does not modify any vendored CosyVoice source.
-
 Run (under the isolated env's Python):
     python server.py --host 127.0.0.1 --port 50000 \
         --cosyvoice-dir <install>/CosyVoice \

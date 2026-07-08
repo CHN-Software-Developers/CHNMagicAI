@@ -97,7 +97,7 @@
     "enabled": true,
     "host": "127.0.0.1",
     "port": 50000,
-    "install_dir": "tts_engine",
+    "install_dir": "",
     "repo": "https://github.com/FunAudioLLM/CosyVoice",
     "commit": "",
     "model_repo": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",

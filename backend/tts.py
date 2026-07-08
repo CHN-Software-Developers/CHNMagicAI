@@ -56,8 +56,10 @@ def _kill_pid(pid):
 
 
 def _abs_install_dir(tts_cfg):
-    d = tts_cfg.get("install_dir") or "tts_engine"
-    return d if os.path.isabs(d) else os.path.join(ROOT, d)
+    # Shared with the installer so the running service and setup_tts always agree on the location
+    # (empty/unset -> per-user app-data dir outside the repo; relative -> repo-relative back-compat).
+    import bootstrap
+    return bootstrap.resolve_tts_install_dir(tts_cfg)
 
 
 def _venv_python(install_dir):

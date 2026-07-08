@@ -60,6 +60,9 @@ venv/
 *.egg-info/
 
 other-installs
+# Legacy default location for the voice engine (now defaults to a per-user app-data dir). Kept
+# ignored so a leftover or an old relative install_dir never pollutes the working tree.
+/tts_engine/
 
 # --- Misc ---------------------------------------------------------------------
 *.log

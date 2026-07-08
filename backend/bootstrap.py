@@ -504,6 +504,30 @@ def _launch_in_new_console(script_path):
         subprocess.Popen(["sh", script_path])
 
 
+def default_tts_install_dir():
+    """Per-machine home for the voice engine (CosyVoice clone + private venv + downloaded model
+    weights and caches) when the user hasn't chosen a location. Deliberately OUTSIDE the app repo —
+    a platform-appropriate per-user app-data dir — so a default install never dumps a multi-GB tree
+    into the working copy (which showed up as an untracked `tts_engine/`). The user can still point
+    this anywhere via the Models panel (persisted to settings.local.json)."""
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+    elif sys.platform == "darwin":
+        base = os.path.join(os.path.expanduser("~"), "Library", "Application Support")
+    else:
+        base = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+    return os.path.join(base, "AIVideoBuilder", "tts_engine")
+
+
+def resolve_tts_install_dir(tts_cfg):
+    """Turn a configured tts.install_dir into an absolute path. Empty/unset -> the app-data default.
+    A relative value stays repo-relative (back-compat for anyone who set one)."""
+    d = (tts_cfg or {}).get("install_dir")
+    if not d:
+        return default_tts_install_dir()
+    return d if os.path.isabs(d) else os.path.join(ROOT, d)
+
+
 def setup_tts(install_dir=None, progress_cb=None):
     """Launch the voice-engine installer in a new terminal window. Returns (ok, message).
 
@@ -516,8 +540,7 @@ def setup_tts(install_dir=None, progress_cb=None):
     tts = settings.get("tts", {})
 
     if not install_dir:
-        d = tts.get("install_dir", "tts_engine")
-        install_dir = d if os.path.isabs(d) else os.path.join(ROOT, d)
+        install_dir = resolve_tts_install_dir(tts)
     install_dir = os.path.abspath(install_dir)
 
     try:
