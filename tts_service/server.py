@@ -86,15 +86,29 @@ def _load_whisper():
         if _state["whisper"] is not None:
             return _state["whisper"]
         from faster_whisper import WhisperModel  # noqa: E402
+
         # faster-whisper uses CTranslate2 (its own CUDA/cuDNN path). On Windows the GPU build often
         # isn't available; fall back to CPU int8 so transcription still works.
-        try:
+        def _build(local_only):
             if CFG["device"] == "cuda":
-                _state["whisper"] = WhisperModel(CFG["whisper_model"], device="cuda", compute_type="float16")
-                return _state["whisper"]
+                try:
+                    return WhisperModel(CFG["whisper_model"], device="cuda",
+                                        compute_type="float16", local_files_only=local_only)
+                except Exception as e:
+                    print(f"[tts] Whisper CUDA unavailable ({e}); using CPU.", flush=True)
+            return WhisperModel(CFG["whisper_model"], device="cpu",
+                                compute_type="int8", local_files_only=local_only)
+
+        # Load from the install-time local cache only. The model was fetched during install, so a
+        # network round-trip is pure overhead — and on a TLS-intercepting network huggingface_hub's
+        # revision/etag check hangs on connection retries for MINUTES (idle CPU) before falling back
+        # to cache. That was the ~3-minute first-/transcribe stall. Only reach the network to download
+        # once if the model genuinely isn't cached yet (e.g. a dev run that skipped the installer).
+        try:
+            _state["whisper"] = _build(local_only=True)
         except Exception as e:
-            print(f"[tts] Whisper CUDA unavailable ({e}); using CPU.", flush=True)
-        _state["whisper"] = WhisperModel(CFG["whisper_model"], device="cpu", compute_type="int8")
+            print(f"[tts] Whisper model not in local cache ({e}); downloading once…", flush=True)
+            _state["whisper"] = _build(local_only=False)
         return _state["whisper"]
 
 
@@ -186,7 +200,13 @@ def synthesize(req: dict):
 
         wav = _collect(gen)
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        torchaudio.save(out_path, wav.cpu(), _state["sr"])
+        # Write a standard 16-bit PCM WAV (fmt code 1). torchaudio would otherwise emit a
+        # 32-bit IEEE-float WAV (fmt code 3) for CosyVoice's float output: the browser can still
+        # preview that, but the engine's audio pipeline mishandles 32-bit float and the timeline
+        # audio then fails to drive lip-sync. Uploaded clips are 16-bit PCM and lip-sync fine, so
+        # match that format exactly.
+        torchaudio.save(out_path, wav.cpu(), _state["sr"],
+                        encoding="PCM_S", bits_per_sample=16)
         dur = wav.shape[1] / float(_state["sr"]) if _state["sr"] else 0.0
         return {"ok": True, "path": out_path, "sample_rate": _state["sr"], "duration": round(dur, 3)}
     except Exception as e:
@@ -255,6 +275,11 @@ def _init_downloads(model_dir):
     # the user profile, so everything the voice engine downloads lives under one folder.
     install_dir = os.path.dirname(os.path.dirname(os.path.abspath(model_dir)))
     os.environ.setdefault("MODELSCOPE_CACHE", os.path.join(install_dir, "modelscope_cache"))
+    # Point huggingface_hub (faster-whisper's model store) at the install-time cache. The installer
+    # pre-downloads the whisper model here with HF_HOME set to the same path; without this the runtime
+    # process falls back to the default profile cache, doesn't find the model, and tries to re-download
+    # it — which stalls for minutes on a TLS-intercepting network. Must match bootstrap's HF_CACHE.
+    os.environ.setdefault("HF_HOME", os.path.join(install_dir, "hf_cache"))
 
 
 def main():
