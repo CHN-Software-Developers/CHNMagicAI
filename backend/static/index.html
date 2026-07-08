@@ -43,223 +43,259 @@
       <!-- ============ PHASE 1 — COMPOSE ============ -->
       <section id="phaseSetup" class="phase phase-setup">
         <div class="compose">
-          <!-- Top action row — Generate sits above the preview, top-right -->
+          <!-- Top action row — Generate sits top-right -->
           <div class="compose-top">
-            <h3 class="section-title">Preview</h3>
+            <div class="compose-title">
+              <span class="ct-eyebrow">Director console</span>
+              <h3 class="section-title">Compose your shot</h3>
+            </div>
             <button id="generate" class="btn btn-primary btn-lg" disabled>
               Generate video →
             </button>
           </div>
 
-          <!-- Composition preview (plays back the timeline you've built — NOT
-               the live per-step generation preview, which appears in phase 2) -->
-          <div class="panel preview-panel">
-            <div class="cprev-stage" id="cprevStage">
-              <div id="cprevEmpty" class="cprev-empty">
-                Press&nbsp;▶ to preview the timeline you've composed.
-              </div>
-              <img
-                id="cprevImg"
-                class="cprev-media hidden"
-                alt="composition preview"
-              />
-              <video
-                id="cprevVideo"
-                class="cprev-media hidden"
-                muted
-                playsinline
-              ></video>
-              <div id="cprevText" class="cprev-text hidden"></div>
-            </div>
-            <div class="cprev-controls">
-              <button
-                id="cprevPlay"
-                class="cprev-play"
-                title="Play / pause preview"
-                aria-label="Play preview"
-              >
-                ▶
-              </button>
-              <div class="cprev-scrub" id="cprevScrub">
-                <div class="cprev-scrub-fill" id="cprevScrubFill"></div>
-              </div>
-              <span id="cprevTime" class="cprev-time">0.0s / 0.0s</span>
-            </div>
-          </div>
-
-          <!-- Basic settings, directly under the preview -->
-          <div class="panel settings-strip">
-            <div class="key-settings">
-              <label class="field">
-                <span>Resolution</span>
-                <select id="resolution"></select>
-              </label>
-              <label class="field">
-                <span>Aspect ratio</span>
-                <select id="aspect">
-                  <option value="landscape">Landscape 16:9</option>
-                  <option value="portrait">Portrait 9:16</option>
-                  <option value="square">Square 1:1</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>Frame rate</span>
-                <div class="unit-input">
-                  <input
-                    id="fps"
-                    type="number"
-                    min="8"
-                    max="60"
-                    step="1"
-                    value="24"
-                  />
-                  <span class="unit">fps</span>
+          <div class="compose-main">
+            <!-- LEFT: monitor-feed preview (top) + timeline (bottom) -->
+            <div class="compose-left">
+              <div class="panel preview-panel">
+                <div class="monitor-head">
+                  <span class="mon-live"
+                    ><span class="mon-dot"></span> Monitor Feed</span
+                  >
+                  <span class="mon-tag">◈ Composition Preview</span>
                 </div>
-              </label>
-              <label class="field">
-                <span>Duration</span>
-                <div class="unit-input">
-                  <input
-                    id="duration"
-                    type="number"
-                    min="1"
-                    max="60"
-                    step="1"
-                    value="5"
+                <div class="cprev-stage" id="cprevStage">
+                  <div id="cprevEmpty" class="cprev-empty">
+                    Press&nbsp;▶ to preview the timeline you've composed.
+                  </div>
+                  <img
+                    id="cprevImg"
+                    class="cprev-media hidden"
+                    alt="composition preview"
                   />
-                  <span class="unit">sec</span>
+                  <video
+                    id="cprevVideo"
+                    class="cprev-media hidden"
+                    muted
+                    playsinline
+                  ></video>
+                  <div id="cprevText" class="cprev-text hidden"></div>
                 </div>
-              </label>
-            </div>
-          </div>
-
-          <!-- The timeline -->
-          <div class="panel timeline-panel">
-            <div class="timeline-head">
-              <h3>Timeline</h3>
-              <div class="timeline-info">
-                <span id="tlTotal">0 frames</span> ·
-                <span id="tlDur">0.0s</span>
-              </div>
-              <div class="timeline-actions">
-                <button class="btn btn-sm" id="addText">+ Text</button>
-                <button class="btn btn-sm" id="addImage">+ Image</button>
-                <button class="btn btn-sm" id="addAudio">+ Audio</button>
-                <button class="btn btn-sm" id="addVideo">+ Video</button>
-                <button class="btn btn-sm btn-ghost" id="openAdvanced">
-                  ⚙ Advanced
-                </button>
-              </div>
-            </div>
-
-            <div id="tl" class="tl">
-              <div class="tl-ruler" id="tlRuler"></div>
-              <div class="tl-track" data-track="main">
-                <span class="tl-track-tag">VIDEO</span>
-                <div class="tl-lane" id="laneMain"></div>
-              </div>
-              <div class="tl-track motion" data-track="motion">
-                <span class="tl-track-tag">MOTION VIDEO</span>
-                <div class="tl-lane" id="laneMotion"></div>
-              </div>
-              <div class="tl-track audio" data-track="audio">
-                <span class="tl-track-tag">AUDIO</span>
-                <div class="tl-lane" id="laneAudio"></div>
-              </div>
-              <!-- Playhead: the draggable position indicator -->
-              <div class="tl-playhead" id="tlPlayhead">
-                <div class="tl-playhead-grip" id="tlPlayheadGrip"></div>
-              </div>
-            </div>
-            <p class="hint">
-              Click a shot to edit its prompt, drag to reorder, drag the right
-              edge to change length. Audio/Motion clips drag <b>anywhere</b> and
-              resize from either edge. Drag the ruler or the vertical
-              <b>playhead</b> to scrub the preview above.
-            </p>
-          </div>
-
-          <!-- Below the timeline: feature toggles + prompt entry areas -->
-          <div class="panel below-tl">
-            <div class="toggles feature-toggles">
-              <label class="chk2"
-                ><input id="lipSync" type="checkbox" /> 🎤 Lip-sync video to
-                voice track</label
-              >
-              <label class="chk2"
-                ><input id="bgMusicRemoval" type="checkbox" /> 🎚 Remove
-                background music</label
-              >
-              <label class="chk2"
-                ><input id="overrideAudio" type="checkbox" /> Use loaded video's
-                own audio</label
-              >
-            </div>
-
-            <label class="field">
-              <span
-                >Global prompt <small>(overall scene &amp; style)</small></span
-              >
-              <textarea
-                id="globalPrompt"
-                rows="2"
-                placeholder="Cinematic street photography, a young woman walking down a cobblestone street at golden hour…"
-              ></textarea>
-            </label>
-
-            <!-- Selected main-track shot editor -->
-            <div id="segEditor" class="seg-editor hidden">
-              <div class="seg-editor-head">
-                <strong id="segEditorTitle">Shot</strong>
-                <button class="btn btn-sm btn-ghost" id="segClose">✕</button>
-              </div>
-              <label class="field">
-                <span>Shot prompt</span>
-                <textarea
-                  id="segPrompt"
-                  rows="3"
-                  placeholder="Describe this shot — camera, subject, action, lighting…"
-                ></textarea>
-              </label>
-              <div class="seg-editor-row">
-                <div id="segImageWrap" class="seg-image hidden">
-                  <img id="segImage" alt="reference" />
-                  <button class="btn btn-sm btn-ghost" id="segReplaceImg">
-                    Replace image
+                <div class="cprev-controls">
+                  <button
+                    id="cprevPlay"
+                    class="cprev-play"
+                    title="Play / pause preview"
+                    aria-label="Play preview"
+                  >
+                    ▶
                   </button>
+                  <div class="cprev-scrub" id="cprevScrub">
+                    <div class="cprev-scrub-fill" id="cprevScrubFill"></div>
+                  </div>
+                  <span id="cprevTime" class="cprev-time">0.0s / 0.0s</span>
                 </div>
-                <span class="seg-len"
-                  >Length: <b id="segLen">0</b> frames (<span id="segSecs"
-                    >0.0</span
-                  >s)</span
-                >
-                <button class="btn btn-sm btn-danger" id="segDelete">
-                  Delete shot
-                </button>
+              </div>
+
+              <div class="panel timeline-panel">
+                <div class="timeline-head">
+                  <div class="card-label">
+                    <span class="ci">◫</span> Timeline editor
+                  </div>
+                  <div class="timeline-info">
+                    <span id="tlTotal">0 frames</span> ·
+                    <span id="tlDur">0.0s</span>
+                  </div>
+                  <div class="timeline-actions">
+                    <button class="btn btn-sm" id="addText">+ Text</button>
+                    <button class="btn btn-sm" id="addImage">+ Image</button>
+                    <button class="btn btn-sm" id="addVideo">+ Video</button>
+                    <button class="btn btn-sm" id="addAudio">+ Audio</button>
+                    <button class="btn btn-sm btn-ghost" id="openAdvanced">
+                      ⚙ Advanced
+                    </button>
+                  </div>
+                </div>
+
+                <div id="tl" class="tl">
+                  <div class="tl-ruler" id="tlRuler"></div>
+                  <div class="tl-track" data-track="main">
+                    <span class="tl-track-tag"
+                      ><b>Video</b><i>Shots &amp; text</i></span
+                    >
+                    <div class="tl-lane" id="laneMain"></div>
+                  </div>
+                  <div class="tl-track motion" data-track="motion">
+                    <span class="tl-track-tag"
+                      ><b>Motion</b><i>Camera guidance</i></span
+                    >
+                    <div class="tl-lane" id="laneMotion"></div>
+                  </div>
+                  <div class="tl-track audio" data-track="audio">
+                    <span class="tl-track-tag"
+                      ><b>Audio</b><i>Score &amp; voice</i></span
+                    >
+                    <div class="tl-lane" id="laneAudio"></div>
+                  </div>
+                  <!-- Playhead: the draggable position indicator -->
+                  <div class="tl-playhead" id="tlPlayhead">
+                    <div class="tl-playhead-grip" id="tlPlayheadGrip"></div>
+                  </div>
+                </div>
+                <p class="hint">
+                  Click a shot to edit it in the side panel. Drag to reorder,
+                  drag the right edge to change length. Audio/Motion clips drag
+                  <b>anywhere</b> and resize from either edge. Drag the ruler or
+                  the vertical <b>playhead</b> to scrub the preview above.
+                </p>
               </div>
             </div>
 
-            <!-- Selected audio/video clip editor -->
-            <div id="clipEditor" class="seg-editor hidden">
-              <div class="seg-editor-head">
-                <strong id="clipEditorTitle">Clip</strong>
-                <button class="btn btn-sm btn-ghost" id="clipClose">✕</button>
+            <!-- RIGHT: single panel — swaps between global settings and the
+                 editor for whichever timeline segment/clip is selected. -->
+            <aside class="panel side-panel">
+              <!-- Global settings view (default) -->
+              <div id="globalView" class="side-view">
+                <div class="side-card-block">
+                  <div class="card-label">
+                    <span class="ci">✎</span> Global cinematic prompt
+                  </div>
+                  <textarea
+                    id="globalPrompt"
+                    rows="5"
+                    placeholder="Cinematic street photography, a young woman walking down a cobblestone street at golden hour…"
+                  ></textarea>
+                </div>
+
+                <div class="side-card-block">
+                  <div class="card-label">
+                    <span class="ci">▦</span> Studio render specs
+                  </div>
+                  <div class="key-settings">
+                    <label class="field">
+                      <span>Resolution</span>
+                      <select id="resolution"></select>
+                    </label>
+                    <label class="field">
+                      <span>Aspect ratio</span>
+                      <select id="aspect">
+                        <option value="landscape">Landscape 16:9</option>
+                        <option value="portrait">Portrait 9:16</option>
+                        <option value="square">Square 1:1</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>Frame rate</span>
+                      <div class="unit-input">
+                        <input
+                          id="fps"
+                          type="number"
+                          min="8"
+                          max="60"
+                          step="1"
+                          value="24"
+                        />
+                        <span class="unit">fps</span>
+                      </div>
+                    </label>
+                    <label class="field">
+                      <span>Duration</span>
+                      <div class="unit-input">
+                        <input
+                          id="duration"
+                          type="number"
+                          min="1"
+                          max="60"
+                          step="1"
+                          value="5"
+                        />
+                        <span class="unit">sec</span>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="side-card-block">
+                  <div class="card-label">
+                    <span class="ci">◉</span> Audio &amp; sync
+                  </div>
+                  <div class="toggles feature-toggles">
+                    <label class="chk2"
+                      ><input id="lipSync" type="checkbox" /> 🎤 Lip-sync video
+                      to voice track</label
+                    >
+                    <label class="chk2"
+                      ><input id="bgMusicRemoval" type="checkbox" /> 🎚 Remove
+                      background music</label
+                    >
+                    <label class="chk2"
+                      ><input id="overrideAudio" type="checkbox" /> Use loaded
+                      video's own audio</label
+                    >
+                  </div>
+                </div>
               </div>
-              <div class="seg-media" id="clipMediaWrap"></div>
-              <div class="seg-editor-row">
-                <span class="seg-len"
-                  >Start <b id="clipStart">0</b>f · Length
-                  <b id="clipLen">0</b>f (<span id="clipSecs">0.0</span>s)</span
-                >
-                <label class="chk2" id="clipVoiceWrap"
-                  ><input id="clipVoice" type="checkbox" /> Voice track (for
-                  lip-sync)</label
-                >
-                <button class="btn btn-sm btn-danger" id="clipDelete">
-                  Delete clip
+
+              <!-- Selected main-track shot editor -->
+              <div id="segEditor" class="side-view hidden">
+                <button class="side-back" id="segClose">
+                  ← Back to settings
                 </button>
+                <div class="side-card-block">
+                  <div class="card-label">
+                    <span class="ci">◧</span
+                    ><span id="segEditorTitle">Shot</span>
+                  </div>
+                  <label class="field">
+                    <span>Shot prompt</span>
+                    <textarea
+                      id="segPrompt"
+                      rows="4"
+                      placeholder="Describe this shot — camera, subject, action, lighting…"
+                    ></textarea>
+                  </label>
+                  <div id="segImageWrap" class="seg-image hidden">
+                    <img id="segImage" alt="reference" />
+                    <button class="btn btn-sm btn-ghost" id="segReplaceImg">
+                      Replace image
+                    </button>
+                  </div>
+                  <span class="seg-len"
+                    >Length: <b id="segLen">0</b> frames (<span id="segSecs"
+                      >0.0</span
+                    >s)</span
+                  >
+                  <p class="hint">
+                    Use the 🗑 icon on the selected segment to delete it.
+                  </p>
+                </div>
               </div>
-            </div>
+
+              <!-- Selected audio/video clip editor -->
+              <div id="clipEditor" class="side-view hidden">
+                <button class="side-back" id="clipClose">
+                  ← Back to settings
+                </button>
+                <div class="side-card-block">
+                  <div class="card-label">
+                    <span class="ci">◧</span
+                    ><span id="clipEditorTitle">Clip</span>
+                  </div>
+                  <div class="seg-media" id="clipMediaWrap"></div>
+                  <span class="seg-len"
+                    >Start <b id="clipStart">0</b>f · Length
+                    <b id="clipLen">0</b>f (<span id="clipSecs">0.0</span>s)</span
+                  >
+                  <label class="chk2" id="clipVoiceWrap"
+                    ><input id="clipVoice" type="checkbox" /> Voice track (for
+                    lip-sync)</label
+                  >
+                  <p class="hint">
+                    Use the 🗑 icon on the selected clip to delete it.
+                  </p>
+                </div>
+              </div>
+            </aside>
           </div>
         </div>
       </section>

@@ -36,6 +36,12 @@ const state = {
 let segId = 1;
 const newId = () => `seg_${Date.now()}_${segId++}`;
 
+// Trash glyph for the per-segment delete control (shown only when selected).
+const TRASH_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6M14 11v6"/></svg>';
+const delBtnHtml = (title) =>
+  `<button class="tl-del" data-del="1" title="${title}">${TRASH_SVG}</button>`;
+
 const curFps = () => parseFloat($("fps").value) || 24;
 
 /* Composition preview playback state. This plays back the timeline the user has
@@ -183,6 +189,7 @@ function removeSegment(id) {
   if (state.selectedId === id) {
     state.selectedId = null;
     $("segEditor").classList.add("hidden");
+    $("globalView").classList.remove("hidden");
   }
   if (state.segments.length) fitToTotal();
   renderTimeline();
@@ -243,6 +250,7 @@ function renderMain() {
         : "") +
       `<div class="b-head"><span class="b-kind">${kind}</span></div>` +
       `<div class="b-prompt" title="${escapeHtml(s.prompt || "")}">${escapeHtml(s.prompt || "(no prompt)")}</div>` +
+      delBtnHtml("Delete shot") +
       (idx < state.segments.length - 1
         ? `<div class="b-handle" data-handle="1"></div>`
         : "");
@@ -305,6 +313,7 @@ function renderLane(kind, clips, lane, autoOn, autoText, offText) {
       `<span class="c-kind">${kindLabel}</span>` +
       `<div class="c-handle left" data-handle="left"></div>` +
       `<div class="c-handle right" data-handle="right"></div>` +
+      delBtnHtml("Delete clip") +
       `<div class="c-label" title="${escapeHtml(c.name)}">${escapeHtml(c.name)}</div>`;
     lane.appendChild(el);
   });
@@ -327,6 +336,12 @@ function bindBlockPointer(lane) {
 function onBlockDown(e, block, lane) {
   e.preventDefault();
   const id = block.dataset.id;
+  // Delete icon (only present while selected) — remove and stop.
+  if (e.target.closest("[data-del]")) {
+    e.stopPropagation();
+    removeSegment(id);
+    return;
+  }
   const isHandle = e.target.dataset.handle === "1";
   const laneRect = lane.getBoundingClientRect();
   const total = totalFrames();
@@ -381,7 +396,11 @@ function onBlockDown(e, block, lane) {
   const onUp = () => {
     document.removeEventListener("pointermove", onMove);
     document.removeEventListener("pointerup", onUp);
-    if (!moved) selectSegment(id);
+    // Tap (no drag): toggle — select, or deselect back to global settings.
+    if (!moved) {
+      if (state.selectedId === id) showGlobalView();
+      else selectSegment(id);
+    }
     renderTimeline();
   };
   document.addEventListener("pointermove", onMove);
@@ -410,6 +429,12 @@ function onClipDown(e, el, lane, kind) {
   const id = el.dataset.id;
   const c = clipsOf(kind).find((x) => x.id === id);
   if (!c) return;
+  // Delete icon (only present while selected) — remove and stop.
+  if (e.target.closest("[data-del]")) {
+    e.stopPropagation();
+    removeClip(id);
+    return;
+  }
   const handle = e.target.dataset.handle; // 'left' | 'right' | undefined (move)
   const laneRect = lane.getBoundingClientRect();
   const total = totalFrames();
@@ -440,17 +465,34 @@ function onClipDown(e, el, lane, kind) {
   const onUp = () => {
     document.removeEventListener("pointermove", onMove);
     document.removeEventListener("pointerup", onUp);
-    if (!moved) selectClip(id);
+    // Tap (no drag): toggle — select, or deselect back to global settings.
+    if (!moved) {
+      if (state.selectedClipId === id) showGlobalView();
+      else selectClip(id);
+    }
     renderTimeline();
   };
   document.addEventListener("pointermove", onMove);
   document.addEventListener("pointerup", onUp);
 }
 
+/* ------------------------------- side panel: view switching ------------------------------- */
+// The right panel shows global settings by default and swaps to the shot/clip
+// editor while a timeline item is selected. Deselecting returns to global.
+function showGlobalView() {
+  state.selectedId = null;
+  state.selectedClipId = null;
+  $("segEditor").classList.add("hidden");
+  $("clipEditor").classList.add("hidden");
+  $("globalView").classList.remove("hidden");
+  renderTimeline();
+}
+
 /* ------------------------------- main-shot editor ------------------------------- */
 function selectSegment(id) {
   state.selectedClipId = null;
   $("clipEditor").classList.add("hidden");
+  $("globalView").classList.add("hidden");
   state.selectedId = id;
   const s = state.segments.find((x) => x.id === id);
   if (!s) return;
@@ -480,6 +522,7 @@ function refreshSegEditorLen() {
 function selectClip(id) {
   state.selectedId = null;
   $("segEditor").classList.add("hidden");
+  $("globalView").classList.add("hidden");
   state.selectedClipId = id;
   const c = findClip(id);
   if (!c) return;
@@ -519,6 +562,7 @@ function removeClip(id) {
   if (state.selectedClipId === id) {
     state.selectedClipId = null;
     $("clipEditor").classList.add("hidden");
+    $("globalView").classList.remove("hidden");
   }
   renderTimeline();
   refreshPreview();
@@ -1668,25 +1712,11 @@ function wireEvents() {
       refreshPreview();
     }
   });
-  $("segClose").addEventListener("click", () => {
-    state.selectedId = null;
-    $("segEditor").classList.add("hidden");
-    renderMain();
-  });
-  $("segDelete").addEventListener("click", () => {
-    if (state.selectedId) removeSegment(state.selectedId);
-  });
+  $("segClose").addEventListener("click", showGlobalView);
   $("segReplaceImg").addEventListener("click", replaceImage);
 
   // clip editor
-  $("clipClose").addEventListener("click", () => {
-    state.selectedClipId = null;
-    $("clipEditor").classList.add("hidden");
-    renderClips();
-  });
-  $("clipDelete").addEventListener("click", () => {
-    if (state.selectedClipId) removeClip(state.selectedClipId);
-  });
+  $("clipClose").addEventListener("click", showGlobalView);
   $("clipVoice").addEventListener("change", (e) => {
     const c = findClip(state.selectedClipId);
     if (c) {
