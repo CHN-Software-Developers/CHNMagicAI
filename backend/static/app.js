@@ -1,6 +1,8 @@
-/* AIVideoBuilder frontend — 3-phase stepper flow + LTX Director 2 style timeline.
-   Main (VIDEO) track = docked shots that partition the duration. Motion (VIDEO) and AUDIO
-   tracks hold free-placement clips you can drag anywhere and resize from either edge. */
+/* CHNMagicAI frontend — projects workspace + 3-phase studio (LTX Director 2 style timeline).
+   Top-level screens (body[data-screen]): projects (landing) → library (a project's media grid)
+   → studio (the Compose/Generate/Result stepper). Inside the studio, the Main (VIDEO) track =
+   docked shots that partition the duration; Motion (VIDEO) and AUDIO tracks hold free-placement
+   clips you can drag anywhere and resize from either edge. */
 const $ = (id) => document.getElementById(id);
 const api = (p, opts) => fetch(p, opts).then((r) => r.json());
 
@@ -31,6 +33,12 @@ const state = {
   selectedClipId: null, // selected audio/video clip
   hasResult: false,
   generating: false,
+  // Projects workspace
+  screen: "projects", // projects | library | studio
+  projects: [], // registry list for the landing grid
+  currentProjectId: null, // the project a generation files into
+  currentProject: null, // its loaded manifest (media list)
+  lastMediaId: null, // media id of the just-finished generation (for last-frame upload)
 };
 
 let segId = 1;
@@ -74,6 +82,9 @@ async function init() {
   renderTimeline();
   cprevRenderFrame(0);
   setPhase("setup");
+  // Land on the projects workspace; the studio is prepped above and entered per project.
+  loadProjects();
+  setScreen("projects");
 }
 
 function mkSeg(type, prompt = "", extra = {}) {
@@ -129,6 +140,285 @@ function setPhase(p) {
       el.disabled = !(state.generating || p === "generating");
     else if (el.dataset.step === "result") el.disabled = !state.hasResult;
   });
+}
+
+/* ------------------------------- screens (workspace) ------------------------------- */
+function setScreen(s) {
+  state.screen = s;
+  document.body.dataset.screen = s;
+  if ((s === "library" || s === "studio") && state.currentProject) {
+    $("crumbProject").textContent = state.currentProject.name || "Project";
+  }
+}
+
+async function loadProjects() {
+  const res = await api("/api/projects");
+  state.projects = (res && res.projects) || [];
+  renderProjects();
+}
+
+function renderProjects() {
+  const grid = $("projectGrid");
+  const empty = $("projectsEmpty");
+  grid.innerHTML = "";
+  if (!state.projects.length) {
+    empty.classList.remove("hidden");
+    return;
+  }
+  empty.classList.add("hidden");
+  state.projects.forEach((p) => {
+    const card = document.createElement("article");
+    card.className = "project-card" + (p.exists ? "" : " missing");
+    card.dataset.id = p.id;
+    const thumb = p.thumbnail
+      ? `<img src="/api/projects/${p.thumbnail.project}/file/${p.thumbnail.media}/lastframe" alt="" />`
+      : `<div class="pc-thumb-empty">🎬</div>`;
+    const count = p.media_count || 0;
+    card.innerHTML =
+      `<div class="pc-thumb">${thumb}</div>` +
+      `<div class="pc-body">` +
+      `<h3 class="pc-name">${escapeHtml(p.name)}</h3>` +
+      `<p class="pc-meta">${count} item${count === 1 ? "" : "s"}${
+        p.exists ? "" : " · folder missing"
+      }</p>` +
+      `<p class="pc-path" title="${escapeHtml(p.path || "")}">${escapeHtml(
+        p.path || "",
+      )}</p>` +
+      `</div>` +
+      `<button class="pc-del" data-del="1" title="Remove from list">${TRASH_SVG}</button>`;
+    card.addEventListener("click", (e) => {
+      if (e.target.closest("[data-del]")) {
+        e.stopPropagation();
+        removeProject(p.id);
+        return;
+      }
+      if (!p.exists) {
+        alert("This project folder is missing. Use “Open existing…” to relocate it.");
+        return;
+      }
+      openProject(p.id);
+    });
+    grid.appendChild(card);
+  });
+}
+
+async function pickDir(title) {
+  const res = await api("/api/projects/pick-dir", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  return (res && res.path) || "";
+}
+
+async function pickFile(title) {
+  const res = await api("/api/pick-file", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  return (res && res.path) || "";
+}
+
+// The project name defaults to the chosen folder's own name — the user picks/creates a single
+// folder in the native explorer, so there are no extra browser prompts to juggle.
+function baseName(p) {
+  const parts = (p || "").replace(/[\\/]+$/, "").split(/[\\/]/);
+  return parts[parts.length - 1] || "";
+}
+
+async function newProject() {
+  const folder = await pickDir("Choose or create an empty folder for the new project");
+  if (!folder) return; // cancelled — nothing else pops up
+  const res = await api("/api/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: baseName(folder), location: folder, asRoot: true }),
+  });
+  if (!res.ok) {
+    alert(res.error || "Could not create the project.");
+    return;
+  }
+  await loadProjects();
+  openProject(res.project.id);
+}
+
+async function openExisting() {
+  const path = await pickDir("Select an existing project folder");
+  if (!path) return; // cancelled
+  const res = await api("/api/projects/locate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok) {
+    alert(res.error || "That folder is not a CHNMagicAI project.");
+    return;
+  }
+  await loadProjects();
+  openProject(res.project.id);
+}
+
+async function removeProject(id) {
+  if (!confirm("Remove this project from the list? (Files on disk are kept.)")) return;
+  await api(`/api/projects/${id}`, { method: "DELETE" });
+  loadProjects();
+}
+
+async function openProject(id) {
+  const res = await api(`/api/projects/${id}`);
+  if (!res.ok) {
+    alert(res.error || "Could not open the project.");
+    loadProjects();
+    return;
+  }
+  state.currentProjectId = id;
+  state.currentProject = res;
+  renderLibrary();
+  setScreen("library");
+}
+
+async function refreshLibrary() {
+  if (!state.currentProjectId) return;
+  const res = await api(`/api/projects/${state.currentProjectId}`);
+  if (res.ok) {
+    state.currentProject = res;
+    renderLibrary();
+  }
+}
+
+function renderLibrary() {
+  const proj = state.currentProject;
+  if (!proj) return;
+  $("libTitle").textContent = proj.name || "Project";
+  const media = proj.media || [];
+  $("libSub").textContent = `${media.length} item${media.length === 1 ? "" : "s"}`;
+  const grid = $("mediaGrid");
+  const empty = $("libraryEmpty");
+  grid.innerHTML = "";
+  if (!media.length) {
+    empty.classList.remove("hidden");
+    return;
+  }
+  empty.classList.add("hidden");
+  // newest first
+  media
+    .slice()
+    .reverse()
+    .forEach((m) => grid.appendChild(buildMediaCard(m)));
+}
+
+function buildMediaCard(m) {
+  const card = document.createElement("article");
+  card.className = "media-card";
+  card.dataset.id = m.id;
+  card.dataset.type = m.type;
+  const when = (m.created || "").replace("T", " ").replace(/(\+.*|Z)$/, "");
+  const promptTxt = (m.meta && m.meta.prompt) || "";
+
+  if (m.type === "voice") {
+    card.classList.add("voice-card");
+    card.innerHTML =
+      `<div class="mc-voicehead"><span class="mc-badge">🗣 Voice</span></div>` +
+      `<div class="mc-audio">${
+        m.audio ? `<audio controls preload="none" src="${m.audio}"></audio>` : ""
+      }</div>` +
+      `<div class="mc-foot">` +
+      `<span class="mc-when">${escapeHtml(when)}</span>` +
+      `<div class="mc-actions">` +
+      (m.audio ? `<a class="mc-act" download href="${m.audio}" title="Download audio">⬇ Audio</a>` : "") +
+      `<button class="mc-act mc-del" data-act="delete" title="Delete">${TRASH_SVG}</button>` +
+      `</div></div>` +
+      (promptTxt ? `<p class="mc-prompt">${escapeHtml(promptTxt)}</p>` : "");
+    wireMediaCard(card, m);
+    return card;
+  }
+
+  const frameImg = m.lastFrame
+    ? `<img class="mc-frame hidden" data-pane="frame" src="${m.lastFrame}" alt="last frame" />`
+    : `<div class="mc-frame mc-frame-empty hidden" data-pane="frame">No last frame yet</div>`;
+  card.innerHTML =
+    `<div class="mc-media">` +
+    `<div class="mc-tabs">` +
+    `<button class="mc-tab active" data-mtab="video" type="button">▶ Video</button>` +
+    `<button class="mc-tab" data-mtab="frame" type="button">🖼 Last frame</button>` +
+    `</div>` +
+    `<div class="mc-stage">` +
+    (m.video
+      ? `<video class="mc-video" data-pane="video" controls preload="metadata" ${
+          m.lastFrame ? `poster="${m.lastFrame}"` : ""
+        } src="${m.video}"></video>`
+      : `<div class="mc-video mc-frame-empty" data-pane="video">No video</div>`) +
+    frameImg +
+    `</div></div>` +
+    `<div class="mc-audio">${
+      m.audio ? `<audio controls preload="none" src="${m.audio}"></audio>` : ""
+    }</div>` +
+    `<div class="mc-foot">` +
+    `<span class="mc-when">${escapeHtml(when)}</span>` +
+    `<div class="mc-actions">` +
+    (m.video ? `<a class="mc-act" download href="${m.video}" title="Download video">⬇ Video</a>` : "") +
+    (m.audio ? `<a class="mc-act" download href="${m.audio}" title="Download audio">⬇ Audio</a>` : "") +
+    (m.lastFrame ? `<a class="mc-act" download href="${m.lastFrame}" title="Download last frame">⬇ Frame</a>` : "") +
+    (m.lastFrame ? `<button class="mc-act" data-act="reuse" title="Use last frame in a new generation">↻ Reuse frame</button>` : "") +
+    `<button class="mc-act mc-del" data-act="delete" title="Delete">${TRASH_SVG}</button>` +
+    `</div></div>` +
+    (promptTxt ? `<p class="mc-prompt">${escapeHtml(promptTxt)}</p>` : "");
+  wireMediaCard(card, m);
+  return card;
+}
+
+function wireMediaCard(card, m) {
+  card.querySelectorAll(".mc-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const which = tab.dataset.mtab;
+      card.querySelectorAll(".mc-tab").forEach((t) =>
+        t.classList.toggle("active", t === tab),
+      );
+      card.querySelectorAll("[data-pane]").forEach((p) =>
+        p.classList.toggle("hidden", p.dataset.pane !== which),
+      );
+    });
+  });
+  const delBtn = card.querySelector('[data-act="delete"]');
+  if (delBtn) delBtn.addEventListener("click", () => deleteMedia(m.id));
+  const reuseBtn = card.querySelector('[data-act="reuse"]');
+  if (reuseBtn && m.lastFrame)
+    reuseBtn.addEventListener("click", () => reuseLastFrame(m.lastFrame));
+}
+
+async function deleteMedia(mediaId) {
+  if (!confirm("Delete this artifact and its files?")) return;
+  await api(`/api/projects/${state.currentProjectId}/media/${mediaId}`, {
+    method: "DELETE",
+  });
+  refreshLibrary();
+}
+
+// Pull the stored last-frame image, push it into the engine input bucket as a start image,
+// then enter the studio with that shot queued up for the next generation.
+async function reuseLastFrame(url) {
+  try {
+    const blob = await fetch(url).then((r) => r.blob());
+    const fd = new FormData();
+    fd.append("file", blob, "last_frame.png");
+    const res = await fetch("/api/upload-image", { method: "POST", body: fd }).then(
+      (r) => r.json(),
+    );
+    enterStudio();
+    addSegment("image", "Continue from the previous shot.", {
+      imageFile: res.imageFile,
+      imageB64: res.imageB64,
+    });
+  } catch {
+    alert("Could not reuse that frame.");
+  }
+}
+
+// Enter the studio for the current project (from library or a project card).
+function enterStudio() {
+  setScreen("studio");
+  setPhase("setup");
 }
 
 /* ------------------------------- timeline model ------------------------------- */
@@ -956,6 +1246,7 @@ async function generate() {
   const hasAudioClips = state.audioClips.length > 0;
   const lip = $("lipSync").checked;
   const params = {
+    project_id: state.currentProjectId,
     timeline: buildTimelineData(),
     resolution: $("resolution").value,
     aspect: $("aspect").value,
@@ -1097,7 +1388,7 @@ function handleWS(m) {
       showPreview(m.image, m.mime);
       break;
     case "complete":
-      onComplete(m.video_url);
+      onComplete(m.video_url, m);
       break;
     case "error":
       showGenError(m.message || "Error");
@@ -1108,10 +1399,17 @@ function handleWS(m) {
   }
 }
 
-function onComplete(url) {
+function onComplete(url, msg) {
   state.generating = false;
   if (url) {
     state.hasResult = true;
+    // Remember which project media item this result was filed into, and reveal the
+    // "Project library" action so the user can jump back to the grid.
+    state.lastMediaId = (msg && msg.media && msg.media.id) || null;
+    $("backToLibrary").classList.toggle(
+      "hidden",
+      !(state.currentProjectId && state.lastMediaId),
+    );
     const v = $("video");
     // Fit the result player to the video's real dimensions so portrait/square
     // output isn't letterboxed inside a wide 16:9 frame.
@@ -1127,6 +1425,8 @@ function onComplete(url) {
     v.src = url;
     $("downloadVideo").href = url;
     setPhase("result");
+    // The last frame is produced by the workflow itself (ImageFromBatch → SaveImage) and filed
+    // into the project media item server-side, so there's nothing to capture on the client.
   } else {
     showGenError(
       "Generation finished but produced no video. Check the engine console for details.",
@@ -1228,9 +1528,7 @@ function updateDownload(m) {
 }
 
 async function locate(id) {
-  const path = prompt(
-    "Full path to the model file on your disk / external drive:",
-  );
+  const path = await pickFile("Select the model file on your disk / external drive");
   if (!path) return;
   const res = await api("/api/models/locate", {
     method: "POST",
@@ -1450,6 +1748,7 @@ async function ttsGenerate() {
     return;
   }
   const body = {
+    project_id: state.currentProjectId,
     text,
     mode,
     instruct,
@@ -1738,11 +2037,56 @@ function wireEvents() {
 
   // result actions
   $("editAgain").addEventListener("click", () => setPhase("setup"));
+  $("backToLibrary").addEventListener("click", () => {
+    $("video").removeAttribute("src");
+    state.hasResult = false;
+    refreshLibrary();
+    setScreen("library");
+  });
   $("newVideo").addEventListener("click", () => {
     $("video").removeAttribute("src");
     state.hasResult = false;
     setPhase("setup");
   });
+
+  // workspace / library navigation
+  $("brandHome").addEventListener("click", () => {
+    loadProjects();
+    setScreen("projects");
+  });
+  $("crumbProjects").addEventListener("click", () => {
+    loadProjects();
+    setScreen("projects");
+  });
+  // The project name in the breadcrumb is a "back to this project's media" control — used from
+  // the studio it returns to the library grid rather than all the way out to the workspace.
+  $("crumbProject").addEventListener("click", () => {
+    if (!state.currentProjectId) return;
+    refreshLibrary();
+    setScreen("library");
+  });
+  $("newProject").addEventListener("click", newProject);
+  $("newProjectEmpty").addEventListener("click", newProject);
+  $("openExisting").addEventListener("click", openExisting);
+  $("newGeneration").addEventListener("click", enterStudio);
+  $("newGenerationEmpty").addEventListener("click", enterStudio);
+  $("libRename").addEventListener("click", renameCurrentProject);
+}
+
+async function renameCurrentProject() {
+  if (!state.currentProjectId) return;
+  const name = (
+    prompt("Rename project:", state.currentProject.name || "") || ""
+  ).trim();
+  if (!name) return;
+  await api(`/api/projects/${state.currentProjectId}/rename`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  state.currentProject.name = name;
+  $("libTitle").textContent = name;
+  $("crumbProject").textContent = name;
 }
 
 function escapeHtml(s) {

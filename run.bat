@@ -10,7 +10,7 @@ if not defined BASEPY (
   pause & exit /b 1
 )
 
-echo === AIVideoBuilder: first-run setup check (this can take a while the first time) ===
+echo === CHNMagicAI: first-run setup check (this can take a while the first time) ===
 "%BASEPY%" backend\bootstrap.py
 if errorlevel 1 (
   echo.
@@ -21,7 +21,7 @@ if errorlevel 1 (
 set "ENGINEPY=%BASEPY%"
 if exist engine\python_path.txt set /p ENGINEPY=<engine\python_path.txt
 
-echo === Launching AIVideoBuilder ===
+echo === Launching CHNMagicAI ===
 "%ENGINEPY%" backend\launcher.py
 
 endlocal

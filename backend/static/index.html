@@ -3,22 +3,31 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AIVideoBuilder — LTX Director 2</title>
+    <title>CHNMagicAI — AI video studio</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
-  <body data-phase="setup">
+  <body data-screen="projects" data-phase="setup">
     <header class="topbar">
-      <div class="brand">
+      <button class="brand" id="brandHome" type="button" title="Projects workspace">
         <span class="logo">🎬</span>
         <div>
-          <h1>AIVideoBuilder</h1>
-          <p class="tagline">
-            LTX Director&nbsp;2 &middot; local AI video studio
-          </p>
+          <h1>CHNMagicAI</h1>
+          <p class="tagline">local AI video studio</p>
         </div>
+      </button>
+
+      <!-- Contextual breadcrumb (library / studio) -->
+      <div class="crumb" id="crumb">
+        <button class="crumb-projects" id="crumbProjects" type="button">
+          ← Projects
+        </button>
+        <span class="crumb-sep">▸</span>
+        <button class="crumb-project" id="crumbProject" type="button" title="Back to this project's media">
+          Project
+        </button>
       </div>
 
-      <!-- 3-step stepper (Compose → Generate → Result) -->
+      <!-- 3-step stepper (Compose → Generate → Result) — studio only -->
       <nav class="stepper" id="stepper" aria-label="Progress">
         <button class="step" data-step="setup" type="button">
           <span class="dot">1</span><span class="lbl">Compose</span>
@@ -39,7 +48,66 @@
       </div>
     </header>
 
-    <main class="stage">
+    <!-- ============ SCREEN — PROJECTS WORKSPACE (landing) ============ -->
+    <section id="screenProjects" class="screen screen-projects">
+      <div class="workspace">
+        <div class="ws-head">
+          <div class="ws-head-info">
+            <h2 class="ws-title">Your projects</h2>
+            <p class="ws-sub">
+              Each project keeps its generated videos, audio and stills together.
+              Create a new one or open an existing project folder.
+            </p>
+          </div>
+          <div class="ws-actions">
+            <button class="btn btn-ghost" id="openExisting">
+              📂 Open existing…
+            </button>
+            <button class="btn btn-primary" id="newProject">
+              ＋ New project
+            </button>
+          </div>
+        </div>
+        <div id="projectGrid" class="project-grid"></div>
+        <div id="projectsEmpty" class="ws-empty hidden">
+          <div class="ws-empty-icon">🎬</div>
+          <h3>No projects yet</h3>
+          <p>Create your first project to start generating.</p>
+          <button class="btn btn-primary" id="newProjectEmpty">
+            ＋ New project
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ SCREEN — PROJECT MEDIA SPACE (library) ============ -->
+    <section id="screenLibrary" class="screen screen-library">
+      <div class="library">
+        <div class="lib-head">
+          <div class="lib-head-info">
+            <h2 class="lib-title" id="libTitle">Project</h2>
+            <p class="lib-sub" id="libSub">0 items</p>
+          </div>
+          <div class="lib-actions">
+            <button class="btn btn-ghost btn-sm" id="libRename">✎ Rename</button>
+            <button class="btn btn-primary btn-lg" id="newGeneration">
+              ＋ New generation
+            </button>
+          </div>
+        </div>
+        <div id="mediaGrid" class="media-grid"></div>
+        <div id="libraryEmpty" class="ws-empty hidden">
+          <div class="ws-empty-icon">🎞</div>
+          <h3>No media yet</h3>
+          <p>Generate your first video in this project.</p>
+          <button class="btn btn-primary" id="newGenerationEmpty">
+            ＋ New generation
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <main class="stage screen screen-studio" id="screenStudio">
       <!-- ============ PHASE 1 — COMPOSE ============ -->
       <section id="phaseSetup" class="phase phase-setup">
         <div class="compose">
@@ -345,6 +413,9 @@
             <a id="downloadVideo" class="btn btn-ghost" download>⬇ Download</a>
             <button id="editAgain" class="btn btn-ghost">
               ← Back to editor
+            </button>
+            <button id="backToLibrary" class="btn btn-ghost hidden">
+              ▤ Project library
             </button>
             <button id="newVideo" class="btn btn-primary">＋ New video</button>
           </div>

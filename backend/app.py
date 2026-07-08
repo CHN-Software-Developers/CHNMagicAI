@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 import bootstrap
 import comfy_client
 import models as model_mgr
+import projects as projects_mod
 import tts as tts_mod
 import workflow as wf
 
@@ -23,6 +24,8 @@ LOCAL_CONFIG_PATH = os.path.join(ROOT, "config", "settings.local.json")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
 VIDEO_EXTS = (".mp4", ".webm", ".mov", ".mkv", ".gif")
+AUDIO_EXTS = (".mp3", ".wav", ".flac", ".m4a", ".ogg")
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 
 # ComfyUI node id -> friendly stage label for the progress bar
 STAGE_LABELS = {
@@ -116,15 +119,17 @@ class Hub:
             self.unregister(ws)
 
 
-app = FastAPI(title="AIVideoBuilder")
+app = FastAPI(title="CHNMagicAI")
 hub = Hub()
 settings = load_settings()
 comfy = comfy_client.ComfyClient(settings["comfy_host"], settings["comfy_port"])
 tts_svc = tts_mod.TtsService(settings)
+store = projects_mod.ProjectStore()
 # Tracks the in-flight prompt. `errored` is set when ComfyUI reports an execution_error for it,
 # so the trailing `executing {node: null}` (which ComfyUI sends even after a failure) is not
-# mistaken for a successful completion.
-_current = {"prompt_id": None, "errored": False}
+# mistaken for a successful completion. `project_id`/`meta` remember which project (if any) the
+# result should be filed into and the settings snapshot to store with it.
+_current = {"prompt_id": None, "errored": False, "project_id": None, "meta": None}
 
 
 @app.on_event("startup")
@@ -229,20 +234,86 @@ async def _on_complete(prompt_id):
     async with aiohttp.ClientSession() as session:
         history = await comfy.get_history(session, prompt_id)
     video = _find_video_output(history) if history else None
+    audio = _find_audio_output(history) if history else None
+    last_frame = _find_image_output(history) if history else None
+    msg = {"type": "complete", "prompt_id": prompt_id, "video_url": None}
     if video:
         q = f"filename={video['filename']}&subfolder={video.get('subfolder','')}&type={video.get('type','output')}"
-        await hub.broadcast({"type": "complete", "prompt_id": prompt_id, "video_url": f"/api/media?{q}"})
-    else:
-        await hub.broadcast({"type": "complete", "prompt_id": prompt_id, "video_url": None})
+        msg["video_url"] = f"/api/media?{q}"
+        # File the finished artifact into the active project (if any) — copies the video, its audio
+        # sidecar, and the workflow's last-frame still into the project folder as one MediaItem.
+        # The last frame comes straight from the graph (ImageFromBatch → SaveImage), so it's the
+        # exact final frame. No project → ephemeral, old single-result flow.
+        project_id = _current.get("project_id")
+        if project_id:
+            try:
+                item = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: store.add_generation(
+                        project_id, _output_src_path(video), _output_src_path(audio),
+                        _current.get("meta") or {}, _output_src_path(last_frame)))
+                if item:
+                    msg["project_id"] = project_id
+                    msg["media"] = _media_urls(project_id, item)
+            except Exception:
+                pass
+    await hub.broadcast(msg)
     await _free_models()
 
 
+def _output_src_path(entry):
+    """Absolute on-disk path of a ComfyUI output history entry (ComfyUI writes to <ROOT>/output)."""
+    if not entry or not entry.get("filename"):
+        return None
+    return os.path.join(ROOT, settings["output_dir"], entry.get("subfolder", "") or "", entry["filename"])
+
+
+def _media_urls(project_id, item):
+    """Turn a stored MediaItem (relative paths) into the API's served-URL shape for the frontend."""
+    mid = item["id"]
+
+    def u(kind):
+        return f"/api/projects/{project_id}/file/{mid}/{kind}"
+
+    return {
+        "id": mid, "type": item.get("type"), "created": item.get("created"),
+        "video": u("video") if item.get("video") else None,
+        "audio": u("audio") if item.get("audio") else None,
+        "lastFrame": u("lastframe") if item.get("lastFrame") else None,
+        "meta": item.get("meta", {}),
+    }
+
+
 def _find_video_output(history):
+    return _find_output_by_ext(history, VIDEO_EXTS)
+
+
+def _find_audio_output(history):
+    return _find_output_by_ext(history, AUDIO_EXTS)
+
+
+def _find_image_output(history):
+    """The workflow's last-frame still (SaveImage prefix 'last-frame'). Prefer that exact file so a
+    stray preview image from another node is never mistaken for it; fall back to any image output."""
+    best = None
+    for _node_id, out in (history.get("outputs") or {}).items():
+        for _key, val in out.items():
+            if not isinstance(val, list):
+                continue
+            for entry in val:
+                if not (isinstance(entry, dict) and str(entry.get("filename", "")).lower().endswith(IMAGE_EXTS)):
+                    continue
+                if os.path.basename(str(entry.get("filename", ""))).lower().startswith("last-frame"):
+                    return entry
+                best = best or entry
+    return best
+
+
+def _find_output_by_ext(history, exts):
     for _node_id, out in (history.get("outputs") or {}).items():
         for _key, val in out.items():
             if isinstance(val, list):
                 for entry in val:
-                    if isinstance(entry, dict) and str(entry.get("filename", "")).lower().endswith(VIDEO_EXTS):
+                    if isinstance(entry, dict) and str(entry.get("filename", "")).lower().endswith(exts):
                         return entry
     return None
 
@@ -379,6 +450,16 @@ async def api_generate(req: Request):
         prompt_id = await comfy.queue_prompt(session, prompt)
     _current["prompt_id"] = prompt_id
     _current["errored"] = False
+    _current["project_id"] = params.get("project_id")
+    timeline = params.get("timeline") or {}
+    _current["meta"] = {
+        "prompt": timeline.get("global_prompt") or params.get("prompt") or "",
+        "seed": seed,
+        "resolution": params.get("resolution"),
+        "aspect": params.get("aspect"),
+        "fps": params.get("fps"),
+        "duration": params.get("duration"),
+    }
     await hub.broadcast({"type": "queued", "prompt_id": prompt_id, "seed": seed})
     return {"prompt_id": prompt_id, "seed": seed}
 
@@ -388,6 +469,137 @@ async def api_interrupt():
     async with aiohttp.ClientSession() as session:
         ok = await comfy.interrupt(session)
     return {"ok": ok}
+
+
+# ------------------------------- projects -------------------------------
+
+def _pick_path(title, mode="dir"):
+    """Pop a native OS folder/file picker in a short-lived subprocess and return the chosen path.
+
+    Run out-of-process so tkinter's main-thread requirement never clashes with the asyncio loop.
+    `mode` is "dir" (askdirectory) or "file" (askopenfilename). Returns "" if cancelled/unavailable."""
+    import subprocess
+    import sys
+    picker = "askopenfilename" if mode == "file" else "askdirectory"
+    code = (
+        "import tkinter as tk\n"
+        "from tkinter import filedialog\n"
+        "r = tk.Tk(); r.withdraw(); r.attributes('-topmost', True)\n"
+        "p = filedialog.%s(title=%r)\n"
+        "print(p or '')\n" % (picker, title or "Select")
+    )
+    try:
+        res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=300)
+        return (res.stdout or "").strip()
+    except Exception:
+        return ""
+
+
+def _pick_directory(title):
+    return _pick_path(title, "dir")
+
+
+@app.get("/api/projects")
+async def api_projects_list():
+    return {"projects": store.list_projects()}
+
+
+@app.post("/api/projects/pick-dir")
+async def api_projects_pick_dir(req: Request):
+    body = await req.json()
+    title = body.get("title") or "Select folder"
+    path = await asyncio.get_event_loop().run_in_executor(None, lambda: _pick_directory(title))
+    return {"path": path}
+
+
+@app.post("/api/pick-file")
+async def api_pick_file(req: Request):
+    body = await req.json()
+    title = body.get("title") or "Select a file"
+    path = await asyncio.get_event_loop().run_in_executor(None, lambda: _pick_path(title, "file"))
+    return {"path": path}
+
+
+@app.post("/api/projects")
+async def api_projects_create(req: Request):
+    body = await req.json()
+    try:
+        entry = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: store.create_project(
+                body.get("name"), body.get("location"), as_root=bool(body.get("asRoot"))))
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return {"ok": True, "project": entry}
+
+
+@app.post("/api/projects/locate")
+async def api_projects_locate(req: Request):
+    body = await req.json()
+    try:
+        entry = store.locate_project(body.get("path"))
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return {"ok": True, "project": entry}
+
+
+@app.get("/api/projects/{project_id}")
+async def api_project_get(project_id: str):
+    m = store.get_project(project_id)
+    if not m:
+        return JSONResponse({"ok": False, "error": "Project not found."}, status_code=404)
+    store.touch_opened(project_id)
+    media = [_media_urls(project_id, it) for it in m.get("media", [])]
+    return {"ok": True, "id": m["id"], "name": m["name"], "created": m.get("created"),
+            "path": m.get("path"), "media": media}
+
+
+@app.post("/api/projects/{project_id}/rename")
+async def api_project_rename(project_id: str, req: Request):
+    body = await req.json()
+    try:
+        m = store.rename_project(project_id, body.get("name"))
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    if not m:
+        return JSONResponse({"ok": False, "error": "Project not found."}, status_code=404)
+    return {"ok": True}
+
+
+@app.delete("/api/projects/{project_id}")
+async def api_project_delete(project_id: str, deleteFiles: bool = False):
+    store.delete_project(project_id, delete_files=deleteFiles)
+    return {"ok": True}
+
+
+@app.delete("/api/projects/{project_id}/media/{media_id}")
+async def api_media_delete(project_id: str, media_id: str):
+    ok = store.delete_media(project_id, media_id)
+    return {"ok": ok}
+
+
+@app.get("/api/projects/{project_id}/file/{media_id}/{kind}")
+async def api_project_file(project_id: str, media_id: str, kind: str):
+    p = store.media_file_path(project_id, media_id, kind)
+    if not p:
+        return JSONResponse({"error": "Not found."}, status_code=404)
+    return FileResponse(p)
+
+
+@app.post("/api/projects/{project_id}/media/{media_id}/lastframe")
+async def api_set_lastframe(project_id: str, media_id: str, req: Request):
+    import base64
+    body = await req.json()
+    img = body.get("image") or ""
+    if "," in img:  # strip a data: URL prefix
+        img = img.split(",", 1)[1]
+    try:
+        raw = base64.b64decode(img)
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Invalid image."}, status_code=400)
+    item = store.set_last_frame(project_id, media_id, raw)
+    if not item:
+        return JSONResponse({"ok": False, "error": "Media not found."}, status_code=404)
+    return {"ok": True, "lastFrame": f"/api/projects/{project_id}/file/{media_id}/lastframe"}
 
 
 @app.get("/api/media")
@@ -477,6 +689,15 @@ async def api_tts_synthesize(req: Request):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
     if status == 200 and data.get("ok"):
+        # Keep the WAV in the engine input bucket (the timeline reads it from there), and, when a
+        # project is active, also retain a copy in the project so the speech shows in its media grid.
+        project_id = body.get("project_id")
+        if project_id:
+            try:
+                store.add_voice(project_id, out_path,
+                                {"text": text[:200], "duration": data.get("duration")})
+            except Exception:
+                pass
         return {
             "ok": True,
             "file": f"{_MEDIA_SUBFOLDER}/{name}",

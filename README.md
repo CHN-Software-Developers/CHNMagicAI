@@ -1,4 +1,4 @@
-# AIVideoBuilder
+# CHNMagicAI
 
 A standalone, one-click desktop web app that runs the **LTX Director 2** AI-video pipeline
 (LTX-2.3) locally — **no ComfyUI installation required**. It embeds a private, headless ComfyUI as
@@ -6,7 +6,7 @@ its hidden inference engine and puts a simple, colorful web UI in front of it: a
 basic settings (resolution / frames / steps), live per-step generation preview, model
 auto-download, and an output video player.
 
-> **License:** GPL-3.0 (see `LICENSE`). AIVideoBuilder bundles ComfyUI and the WhatDreamsCost LTX
+> **License:** GPL-3.0 (see `LICENSE`). CHNMagicAI bundles ComfyUI and the WhatDreamsCost LTX
 > Director nodes, both GPL-3.0. See `THIRD_PARTY_NOTICES.md`.
 
 ## Quick start

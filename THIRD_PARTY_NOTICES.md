@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-AIVideoBuilder is distributed under the **GNU General Public License v3.0** (see `LICENSE`).
+CHNMagicAI is distributed under the **GNU General Public License v3.0** (see `LICENSE`).
 It bundles and builds upon the following third-party components. Each is used under its own
 license; all are GPL-3.0 or GPL-compatible. Their original license files are preserved inside
 their vendored directories under `engine/`.
@@ -64,7 +64,7 @@ this repository:
 
 **Voice-cloning ethics/consent:** the cloning path synthesizes speech in the likeness of a supplied
 reference voice. Only clone voices you have the right to use, and follow CosyVoice's own usage
-notice. AIVideoBuilder surfaces this caveat in the install panel. Verify each model's usage terms
+notice. CHNMagicAI surfaces this caveat in the install panel. Verify each model's usage terms
 before redistribution.
 
 ## Modification policy (GPL-3.0 §5a)
@@ -74,7 +74,7 @@ Vendored code under `engine/` is kept **pristine**. Application logic lives in o
 carries a dated notice:
 
 ```
-# Modified by AIVideoBuilder on <YYYY-MM-DD>: <what changed and why>
+# Modified by CHNMagicAI on <YYYY-MM-DD>: <what changed and why>
 ```
 
 and the change is logged in `CHANGES.md`. **Exception:** the vendored MSST tree inside the
@@ -85,5 +85,5 @@ which permits this. No other vendored files have been modified.
 
 ## Corresponding source
 
-The complete corresponding source for AIVideoBuilder and all bundled GPL components is available
+The complete corresponding source for CHNMagicAI and all bundled GPL components is available
 in this repository (the vendored components retain their upstream source under `engine/`).

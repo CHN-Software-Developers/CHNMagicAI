@@ -1,5 +1,5 @@
 /* ============================================================================
-   AIVideoBuilder — "cinematic console" blue theme
+   CHNMagicAI — "cinematic console" blue theme
    Dark navy stage, azure/cyan accents, monospace tech labels. State/kind is
    carried by accent hue (blue = video, cyan = image, violet = motion,
    magenta = audio) plus fills and glyphs.
@@ -1884,5 +1884,435 @@ code {
   }
   .tts-right {
     position: static;
+  }
+}
+
+/* ============================================================================
+   Screens: projects workspace + project media space (library)
+   ============================================================================ */
+.brand {
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 0;
+  cursor: pointer;
+}
+.brand:hover h1 {
+  color: var(--accent-bright);
+}
+
+/* Contextual breadcrumb (library + studio) */
+.crumb {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+body[data-screen="library"] .crumb,
+body[data-screen="studio"] .crumb {
+  display: flex;
+}
+.crumb-projects {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  color: var(--accent-bright);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+  flex-shrink: 0;
+}
+.crumb-projects:hover {
+  background: rgba(91, 155, 255, 0.12);
+  border-color: var(--accent);
+}
+.crumb-sep {
+  color: var(--faint);
+}
+.crumb-project {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: none;
+  border: none;
+  padding: 6px 4px;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.crumb-project:hover {
+  color: var(--accent-bright);
+}
+
+/* Studio-only chrome (stepper + model actions) */
+body:not([data-screen="studio"]) .stepper,
+body:not([data-screen="studio"]) .top-actions {
+  display: none;
+}
+
+/* In the studio the crumb + actions flank the bar; keep the 3-step progress truly centered in
+   the topbar (it otherwise drifts right because the left breadcrumb eats the flex space). */
+body[data-screen="studio"] .crumb {
+  flex: 0 1 auto;
+  max-width: 34%;
+}
+body[data-screen="studio"] .top-actions {
+  flex: 1;
+  justify-content: flex-end;
+}
+body[data-screen="studio"] .stepper {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  flex: 0 0 auto;
+}
+
+/* Screen show/hide */
+.screen {
+  display: none;
+}
+body[data-screen="projects"] #screenProjects,
+body[data-screen="library"] #screenLibrary {
+  display: block;
+  animation: fade 0.25s ease;
+}
+body[data-screen="studio"] #screenStudio {
+  display: block;
+  animation: fade 0.25s ease;
+}
+
+/* Workspace + library shells */
+.workspace,
+.library {
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 26px 28px 48px;
+}
+.ws-head,
+.lib-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+.ws-title,
+.lib-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+}
+.ws-sub,
+.lib-sub {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  max-width: 620px;
+}
+.lib-sub {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.ws-actions,
+.lib-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+/* Project cards grid */
+.project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 18px;
+}
+.project-card {
+  position: relative;
+  background:
+    linear-gradient(180deg, rgba(59, 130, 246, 0.05), transparent 120px),
+    var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    transform 0.15s,
+    box-shadow 0.15s;
+}
+.project-card:hover {
+  border-color: var(--line2);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow);
+}
+.project-card.missing {
+  opacity: 0.6;
+}
+.pc-thumb {
+  aspect-ratio: 16 / 9;
+  background: #02040a;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-bottom: 1px solid var(--line);
+}
+.pc-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.pc-thumb-empty {
+  font-size: 40px;
+  opacity: 0.5;
+}
+.pc-body {
+  padding: 12px 14px 14px;
+}
+.pc-name {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pc-meta {
+  margin: 4px 0 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent-bright);
+}
+.pc-path {
+  margin: 6px 0 0;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pc-del {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  display: none;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(251, 113, 133, 0.55);
+  border-radius: 7px;
+  background: rgba(18, 6, 10, 0.85);
+  color: var(--bad);
+  cursor: pointer;
+  line-height: 0;
+}
+.pc-del svg {
+  width: 13px;
+  height: 13px;
+}
+.project-card:hover .pc-del {
+  display: grid;
+}
+.pc-del:hover {
+  background: rgba(251, 113, 133, 0.24);
+}
+
+/* Empty states */
+.ws-empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--muted);
+}
+.ws-empty-icon {
+  font-size: 52px;
+  opacity: 0.5;
+}
+.ws-empty h3 {
+  margin: 14px 0 6px;
+  color: var(--text);
+  font-size: 18px;
+}
+.ws-empty p {
+  margin: 0 0 18px;
+  font-size: 13px;
+}
+
+/* Media cards grid (project media space) */
+.media-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 20px;
+}
+.media-card {
+  background:
+    linear-gradient(180deg, rgba(59, 130, 246, 0.05), transparent 120px),
+    var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.media-card:hover {
+  border-color: var(--line2);
+}
+.mc-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 8px 8px 0;
+}
+.mc-tab {
+  flex: 1;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-bottom: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 8px;
+  border-radius: 9px 9px 0 0;
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    background 0.15s;
+}
+.mc-tab.active {
+  color: var(--text);
+  background: rgba(47, 107, 255, 0.16);
+  border-color: var(--line2);
+}
+.mc-stage {
+  aspect-ratio: 16 / 9;
+  background: #02040a;
+  border-top: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.mc-video,
+.mc-frame {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.mc-frame-empty {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 12px;
+  display: grid;
+  place-items: center;
+}
+.mc-audio {
+  padding: 10px 12px 0;
+}
+.mc-audio audio {
+  width: 100%;
+  height: 34px;
+}
+.mc-voicehead {
+  padding: 12px 12px 0;
+}
+.mc-badge {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--accent-magenta);
+  background: rgba(244, 114, 182, 0.12);
+  border: 1px solid rgba(244, 114, 182, 0.3);
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+.mc-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  flex-wrap: wrap;
+}
+.mc-when {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--faint);
+}
+.mc-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.mc-act {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 9px;
+  border-radius: 8px;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background 0.15s;
+}
+.mc-act:hover {
+  color: var(--text);
+  border-color: var(--line2);
+  background: rgba(47, 107, 255, 0.1);
+}
+.mc-del {
+  color: var(--bad);
+  border-color: rgba(251, 113, 133, 0.4);
+  line-height: 0;
+}
+.mc-del svg {
+  width: 13px;
+  height: 13px;
+}
+.mc-del:hover {
+  background: rgba(251, 113, 133, 0.18);
+  border-color: rgba(251, 113, 133, 0.6);
+}
+.mc-prompt {
+  margin: 0;
+  padding: 0 12px 12px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+@media (max-width: 640px) {
+  .media-grid,
+  .project-grid {
+    grid-template-columns: 1fr;
+  }
+  .ws-head,
+  .lib-head {
+    flex-direction: column;
+    align-items: stretch;
   }
 }
