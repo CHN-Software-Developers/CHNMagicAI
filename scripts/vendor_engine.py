@@ -2,8 +2,7 @@
 """Vendor a fresh, private ComfyUI engine for AIVideoBuilder.
 
 Produces `engine/ComfyUI` (pristine ComfyUI) + the three custom-node packages the LTX Director 2
-workflow needs, and (optionally) a Python venv with all dependencies. Records provenance
-(commit hashes / source) so GPL-3.0 §5 obligations are met.
+workflow needs, and (optionally) a Python venv with all dependencies.
 
 Custom nodes are copied from a detected local ComfyUI install when available (that gives the exact
 versions this workflow was authored against); otherwise they are cloned from GitHub.
@@ -33,10 +32,8 @@ COMFY_COMMIT = ""
 CUSTOM_NODES = {
     "WhatDreamsCost-ComfyUI": "https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI",
     "comfyui-kjnodes": "https://github.com/kijai/ComfyUI-KJNodes",
-    "cinematic_audio_separation": "",  # no known public git; copied from local install
+    "cinematic_audio_separation": "",  # Custom node created for this app.
 }
-
-DEFAULT_LOCAL_COMFY = "E:/ProgramData/ComfyUI-Installs/ComfyUI/ComfyUI"
 
 IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", ".git")
 
@@ -124,12 +121,13 @@ def install_deps():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--install-deps", action="store_true", help="create venv and pip install (heavy)")
-    ap.add_argument("--local-comfy", default=DEFAULT_LOCAL_COMFY,
-                    help="path to an existing ComfyUI to copy custom nodes from")
+    ap.add_argument("--local-comfy", default="",
+                    help="optional: path to an existing ComfyUI to copy custom nodes from "
+                         "(exact authored versions). If omitted or missing, nodes are cloned from GitHub.")
     args = ap.parse_args()
 
     clone_comfy()
-    local = args.local_comfy if os.path.isdir(args.local_comfy) else None
+    local = args.local_comfy if args.local_comfy and os.path.isdir(args.local_comfy) else None
     provenance = vendor_nodes(local)
     write_provenance(provenance)
     if args.install_deps:

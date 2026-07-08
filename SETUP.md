@@ -41,11 +41,11 @@ fails immediately with `CUDA error: no kernel image is available for execution o
 
 ### Tuning first-run setup (optional, `config/settings.json` → `setup`)
 - `torch_index_url` — PyTorch build. Default `cu128` (see GPU compatibility above).
-- `local_comfy_source` — only used if `engine/ComfyUI` is missing: a local ComfyUI to copy from
-  offline. Blank by default (the engine is already bundled).
-- `comfy_repo` / `comfy_commit` — the pinned ComfyUI version used for the self-heal `git clone`
-  fallback if the bundled engine is missing.
 - `auto` — set `false` to skip the bootstrap entirely and use `python_exe` as-is.
+
+The engine source (ComfyUI + custom nodes) ships vendored inside the repo, so first-run setup never
+downloads or clones it — it only builds the Python environment. Developers regenerate the vendored
+engine with `scripts/vendor_engine.py`.
 
 ## Provide the models (only thing that needs your input)
 

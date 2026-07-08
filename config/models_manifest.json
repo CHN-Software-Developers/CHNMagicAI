@@ -1,5 +1,5 @@
 {
-  "_comment": "User-editable model manifest. Edit url / filename / version / sha256 as needed BEFORE launching, or use the app's 'Locate existing file' button to point at models you already downloaded. A good curated list of LTX-2 download links: https://github.com/wildminder/awesome-ltx2",
+  "_comment": "User-editable model manifest.",
   "models": [
     {
       "id": "unet",

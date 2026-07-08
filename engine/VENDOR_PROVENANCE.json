@@ -13,7 +13,7 @@
     "commit": "eca4757d653654deb5744edf16a862f352800fdc"
   },
   "cinematic_audio_separation": {
-    "source": "custom-built node; vendored from a local ComfyUI install; no known public git remote",
+    "source": "Custom node created for this app",
     "commit": null,
     "embeds": {
       "msst": {

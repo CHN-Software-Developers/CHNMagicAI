@@ -19,10 +19,7 @@
       "files.pythonhosted.org",
       "pypi.python.org",
       "download.pytorch.org"
-    ],
-    "local_comfy_source": "",
-    "comfy_repo": "https://github.com/comfyanonymous/ComfyUI",
-    "comfy_commit": "1e04ced089758f1855b84abad739be503c7dc9cd"
+    ]
   },
   "models": {
     "unet": "ltx-2.3-22b-distilled-1.1_transformer_only_fp8_scaled.safetensors",

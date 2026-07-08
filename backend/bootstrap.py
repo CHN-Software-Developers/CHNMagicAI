@@ -3,8 +3,9 @@
 Idempotent: on subsequent runs it verifies quickly and returns fast. It performs, with no manual
 steps required by the user:
 
-  1. Vendor the engine source: copy ComfyUI from a local install if available (offline & fast),
-     otherwise git-clone it. Copy the 3 required custom-node packages the same way.
+  1. Verify the vendored engine source (ComfyUI + the 3 custom-node packages) is present. It ships
+     inside the repo, so nothing is downloaded or cloned here; a missing source means a broken
+     checkout, and we fail loudly rather than fetch anything from the network.
   2. Create a private Python environment at engine/python.
   3. Install all dependencies into it: CUDA PyTorch, ComfyUI's requirements (sqlalchemy, filelock,
      blake3, Pillow, tqdm, comfy-aimdo, av, ...), each custom node's requirements, and our backend.
@@ -16,7 +17,6 @@ otherwise fail with SSL: CERTIFICATE_VERIFY_FAILED.
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 import sys
 
@@ -30,11 +30,9 @@ PY_PATH_FILE = os.path.join(ENGINE, "python_path.txt")
 CONFIG_PATH = os.path.join(ROOT, "config", "settings.json")
 LOCAL_CONFIG_PATH = os.path.join(ROOT, "config", "settings.local.json")
 
-CUSTOM_NODES = {
-    "WhatDreamsCost-ComfyUI": "https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI",
-    "comfyui-kjnodes": "https://github.com/kijai/ComfyUI-KJNodes",
-    "cinematic_audio_separation": "",  # copied from local install; no known public git
-}
+# Names of the vendored custom-node packages that ship inside engine/ComfyUI/custom_nodes. Used to
+# verify their presence and to install their requirements; NOT to fetch them (they're committed).
+CUSTOM_NODES = ["WhatDreamsCost-ComfyUI", "comfyui-kjnodes", "cinematic_audio_separation"]
 TORCH_PKGS = ["torch", "torchsde", "torchvision", "torchaudio"]
 # Deps required by vendored custom nodes that ship no requirements.txt.
 # cinematic_audio_separation imports soundfile at module load, and its BandIt Plus
@@ -43,10 +41,6 @@ TORCH_PKGS = ["torch", "torchsde", "torchvision", "torchaudio"]
 # must be installed explicitly or the "Remove background music" option fails at runtime.
 EXTRA_NODE_DEPS = ["soundfile", "librosa", "omegaconf", "pytorch-lightning",
                    "spafe", "ml-collections"]
-# Top-level names to skip when copying a local ComfyUI (models/outputs/other people's nodes/etc.)
-COPY_IGNORE = shutil.ignore_patterns(
-    "models", "output", "input", "temp", "user", "custom_nodes",
-    ".git", "__pycache__", "*.pyc", "venv", ".venv")
 
 
 def log(msg):
@@ -83,40 +77,25 @@ def save_local(patch):
 
 # ------------------------------- engine source -------------------------------
 
-def _copy_tree(src, dst, ignore=None):
-    log(f"copying {src} -> {dst}")
-    shutil.copytree(src, dst, ignore=ignore, dirs_exist_ok=True)
-
-
-def ensure_engine_source(setup):
-    if os.path.isfile(os.path.join(COMFY_DST, "main.py")):
-        log("ComfyUI source present.")
-    else:
-        os.makedirs(ENGINE, exist_ok=True)
-        local = setup.get("local_comfy_source", "")
-        if local and os.path.isfile(os.path.join(local, "main.py")):
-            _copy_tree(local, COMFY_DST, ignore=COPY_IGNORE)
-        else:
-            log("cloning ComfyUI...")
-            run(["git", "clone", "--depth", "1", setup["comfy_repo"], COMFY_DST])
-            if setup.get("comfy_commit"):
-                run(["git", "fetch", "--depth", "1", "origin", setup["comfy_commit"]], cwd=COMFY_DST)
-                run(["git", "checkout", setup["comfy_commit"]], cwd=COMFY_DST)
-
-    os.makedirs(NODES_DST, exist_ok=True)
-    for name, url in CUSTOM_NODES.items():
+def verify_engine_source():
+    """Confirm the vendored engine source is present. ComfyUI and the three custom-node packages
+    ship committed inside the repo, so a shipped app always has them; nothing is downloaded here.
+    A missing source means an incomplete checkout (not a normal end-user state), so we fail loudly
+    and point at the developer re-vendor tool instead of silently cloning anything from the network.
+    We still create the runtime dirs ComfyUI expects, since their contents are git-ignored."""
+    if not os.path.isfile(os.path.join(COMFY_DST, "main.py")):
+        raise RuntimeError(
+            f"Engine source missing at {COMFY_DST}. The app ships with ComfyUI vendored inside the "
+            f"repo; this looks like an incomplete checkout. Restore it by re-cloning the repository "
+            f"(or, for developers, run scripts/vendor_engine.py).")
+    for name in CUSTOM_NODES:
         dst = os.path.join(NODES_DST, name)
-        if os.path.isdir(dst):
-            continue
-        local = setup.get("local_comfy_source", "")
-        local_node = os.path.join(local, "custom_nodes", name) if local else ""
-        if local_node and os.path.isdir(local_node):
-            _copy_tree(local_node, dst, ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"))
-        elif url:
-            run(["git", "clone", "--depth", "1", url, dst])
-        else:
-            log(f"WARNING: no source for {name}; place it in {dst} manually.")
-    # dirs ComfyUI expects
+        if not os.path.isdir(dst):
+            raise RuntimeError(
+                f"Vendored custom node '{name}' missing at {dst}. Restore the repository checkout "
+                f"(or, for developers, run scripts/vendor_engine.py).")
+    log("engine source present (vendored).")
+    # runtime dirs ComfyUI expects (their contents are git-ignored, so recreate them)
     for d in ("input", "output", "user"):
         os.makedirs(os.path.join(COMFY_DST, d), exist_ok=True)
 
@@ -568,7 +547,7 @@ def main():
         log("setup.auto is false; skipping bootstrap.")
         py = settings.get("python_exe") or venv_python() or sys.executable
     else:
-        ensure_engine_source(setup)
+        verify_engine_source()
         py = ensure_venv(setup)
         ensure_deps(py, setup)
 
