@@ -10,8 +10,7 @@ their vendored directories under `engine/`.
 | ComfyUI | https://github.com/comfyanonymous/ComfyUI | GPL-3.0 | `engine/ComfyUI` | `1e04ced089758f1855b84abad739be503c7dc9cd` |
 | WhatDreamsCost-ComfyUI (LTX Director) | https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI | GPL-3.0 | `engine/ComfyUI/custom_nodes/WhatDreamsCost-ComfyUI` | `0dfa657a8676f2c56ecc84b735402dcfd6c1eae5` (v2.0.2) |
 | ComfyUI-KJNodes | https://github.com/kijai/ComfyUI-KJNodes | GPL-3.0 | `engine/ComfyUI/custom_nodes/comfyui-kjnodes` | `eca4757d653654deb5744edf16a862f352800fdc` |
-| ComfyUI Cinematic Audio Separation (node wrapper) | custom-built; vendored from a local ComfyUI install (no known public git remote) | check upstream headers | `engine/ComfyUI/custom_nodes/cinematic_audio_separation` | — |
-| └ MSST — Music-Source-Separation-Training (ZFTurbo) | https://github.com/ZFTurbo/Music-Source-Separation-Training | MIT | `engine/ComfyUI/custom_nodes/cinematic_audio_separation/msst` | — |
+| MSST — Music-Source-Separation-Training (ZFTurbo) | https://github.com/ZFTurbo/Music-Source-Separation-Training | MIT | `engine/ComfyUI/custom_nodes/cinematic_audio_separation/msst` | — |
 
 ## What was stripped from the vendored copies
 
