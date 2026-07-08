@@ -17,7 +17,10 @@ Node id map (from the converted template; see scripts/convert_workflow.py):
     28  CFGGuider (stage 1)       cfg
     17  CFGGuider (stage 2)       cfg
     2   CreateVideo (base)        final images+audio -> video
-    156/157/158  background-music-removal chain
+    24  LTXVAudioVAEDecode        raw generated audio (music still present)
+    144 SaveAudioAdvanced         separate audio file (input rewired to the cleaned track when
+                                  bg-music removal is on)
+    156/157/158  background-music-removal chain (157 = CinematicAudioSeparation, out 0 = music_removed)
     37  SaveVideo                 video (input rewired when bg-music removal is off)
 """
 import copy
@@ -45,6 +48,9 @@ STAGE2_CFG_ID = "17"
 SAVEVIDEO_ID = "37"
 BASE_CREATEVIDEO_ID = "2"
 BG_MUSIC_NODE_IDS = ["156", "157", "158"]
+SAVEAUDIO_ID = "144"           # SaveAudioAdvanced: the separate audio-only file
+RAW_AUDIO_ID = "24"            # LTXVAudioVAEDecode: raw generated audio (music present)
+CINEMATIC_SEP_ID = "157"       # CinematicAudioSeparation; output 0 = music_removed (speech+effects)
 
 
 def load_template():
@@ -161,11 +167,21 @@ def build_prompt(params, settings):
                 prompt[cid]["inputs"]["cfg"] = float(params["cfg"])
 
     # --- background-music removal toggle ---------------------------------------------
+    # The pipeline writes two artifacts: the muxed video (SaveVideo/37) and a separate audio-only
+    # file (SaveAudioAdvanced/144). Both must reflect the toggle. When removal is ON, the video is
+    # rebuilt from the cleaned track (158) and the separate audio file must tap the cleaned track
+    # (157, out 0 = music_removed) too — otherwise the sidecar audio keeps the background music even
+    # though the video doesn't. When OFF, both stay on the raw generated audio (24).
     enable_bg = params.get("enable_bg_music_removal", defaults.get("enable_bg_music_removal", False))
-    if not enable_bg:
+    if enable_bg:
+        if SAVEAUDIO_ID in prompt and CINEMATIC_SEP_ID in prompt:
+            prompt[SAVEAUDIO_ID]["inputs"]["audio"] = [CINEMATIC_SEP_ID, 0]
+    else:
         for nid in BG_MUSIC_NODE_IDS:
             prompt.pop(nid, None)
         if SAVEVIDEO_ID in prompt and BASE_CREATEVIDEO_ID in prompt:
             prompt[SAVEVIDEO_ID]["inputs"]["video"] = [BASE_CREATEVIDEO_ID, 0]
+        if SAVEAUDIO_ID in prompt:
+            prompt[SAVEAUDIO_ID]["inputs"]["audio"] = [RAW_AUDIO_ID, 0]
 
     return prompt, seed
