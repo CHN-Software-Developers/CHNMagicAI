@@ -129,7 +129,7 @@ store = projects_mod.ProjectStore()
 # so the trailing `executing {node: null}` (which ComfyUI sends even after a failure) is not
 # mistaken for a successful completion. `project_id`/`meta` remember which project (if any) the
 # result should be filed into and the settings snapshot to store with it.
-_current = {"prompt_id": None, "errored": False, "project_id": None, "meta": None}
+_current = {"prompt_id": None, "errored": False, "project_id": None, "meta": None, "character": None}
 
 
 @app.on_event("startup")
@@ -187,12 +187,14 @@ async def _consume(queue):
         elif mtype in ("execution_error",):
             if data.get("prompt_id") == _current["prompt_id"]:
                 _current["errored"] = True
+                _fail_current_character()
             await hub.broadcast({"type": "error",
                                  "message": _format_error(data)})
             await _free_models()
         elif mtype in ("execution_interrupted",):
             if data.get("prompt_id") == _current["prompt_id"]:
                 _current["errored"] = True
+                _fail_current_character()
             await hub.broadcast({"type": "error", "message": "Generation was interrupted."})
             await _free_models()
         elif mtype in ("status",):
@@ -233,6 +235,14 @@ async def _free_models():
 async def _on_complete(prompt_id):
     async with aiohttp.ClientSession() as session:
         history = await comfy.get_history(session, prompt_id)
+    # A character reference-video run doesn't produce a normal MediaItem — it crops per-mood clips onto
+    # the character instead. Handle it and stop before the ordinary generation-filing path.
+    character = _current.get("character")
+    if character:
+        _current["character"] = None
+        await _finalize_character(history, character)
+        await _free_models()
+        return
     video = _find_video_output(history) if history else None
     audio = _find_audio_output(history) if history else None
     last_frame = _find_image_output(history) if history else None
@@ -316,6 +326,95 @@ def _find_output_by_ext(history, exts):
                     if isinstance(entry, dict) and str(entry.get("filename", "")).lower().endswith(exts):
                         return entry
     return None
+
+
+def _find_audio_output_named(history, prefix):
+    """A cropped mood clip output whose filename starts with `prefix` (the SaveAudioAdvanced
+    'mood/<charId>-<moodKey>' prefix). Matches on basename so the subfolder is ignored."""
+    plo = prefix.lower()
+    for _node_id, out in (history.get("outputs") or {}).items():
+        for _key, val in out.items():
+            if not isinstance(val, list):
+                continue
+            for entry in val:
+                if not isinstance(entry, dict):
+                    continue
+                fn = str(entry.get("filename", ""))
+                if fn.lower().endswith(AUDIO_EXTS) and os.path.basename(fn).lower().startswith(plo):
+                    return entry
+    return None
+
+
+def _character_urls(project_id, char):
+    """Turn a stored Character (relative paths) into the API's served-URL shape for the frontend."""
+    cid = char["id"]
+    moods = []
+    for m in char.get("moods", []):
+        moods.append({
+            "key": m.get("key"), "label": m.get("label"), "tone": m.get("tone", ""),
+            "clip": (f"/api/projects/{project_id}/characters/{cid}/file/mood-{m['key']}"
+                     if m.get("clip") else None),
+            "hasRefText": bool(m.get("refText")),
+        })
+    return {
+        "id": cid, "name": char.get("name"), "description": char.get("description"),
+        "created": char.get("created"), "status": char.get("status"),
+        "video": f"/api/projects/{project_id}/characters/{cid}/file/video" if char.get("video") else None,
+        "avatar": f"/api/projects/{project_id}/characters/{cid}/file/avatar" if char.get("avatar") else None,
+        "moods": moods,
+    }
+
+
+def _fail_current_character():
+    """If the in-flight generation is a character reference-video that errored/was interrupted, mark
+    the character 'error' and clear the marker so it doesn't stay stuck 'generating'. Broadcast the
+    completion so the card flips out of its spinner."""
+    character = _current.get("character")
+    if not character:
+        return
+    _current["character"] = None
+    try:
+        store.set_character_error(character["project_id"], character["character_id"])
+    except Exception:
+        pass
+    asyncio.ensure_future(hub.broadcast({
+        "type": "character_complete", "project_id": character["project_id"],
+        "character_id": character["character_id"], "ok": False}))
+
+
+async def _finalize_character(history, character):
+    """Post-process a finished character reference-video: collect the per-mood cropped clips, transcribe
+    each (best-effort) for an accurate zero-shot ref_text, and file everything onto the character."""
+    project_id, char_id = character["project_id"], character["character_id"]
+    ok = False
+    try:
+        video = _find_video_output(history) if history else None
+        mood_clips = []
+        for mood in character.get("moods", []):
+            entry = _find_audio_output_named(history, f"{char_id}-{mood['key']}") if history else None
+            src = _output_src_path(entry) if entry else None
+            ref_text = ""
+            if src and os.path.isfile(src):
+                try:
+                    data, status = await tts_svc.transcribe({"audio": src})
+                    if status == 200 and data.get("ok"):
+                        ref_text = (data.get("text") or "").strip()
+                except Exception:
+                    pass  # TTS not installed / transcription failed → user can type it in the clone UI
+            mood_clips.append({"key": mood["key"], "src": src, "refText": ref_text})
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: store.finalize_character(
+                project_id, char_id, _output_src_path(video), mood_clips))
+        ok = bool(result)
+    except Exception:
+        ok = False
+    if not ok:
+        try:
+            store.set_character_error(project_id, char_id)
+        except Exception:
+            pass
+    await hub.broadcast({"type": "character_complete", "project_id": project_id,
+                         "character_id": char_id, "ok": ok})
 
 
 # ------------------------------- REST -------------------------------
@@ -431,16 +530,13 @@ async def api_upload_media(file: UploadFile = File(...)):
     }
 
 
-@app.post("/api/generate")
-async def api_generate(req: Request):
-    params = await req.json()
-    if not model_mgr.all_required_present(os.path.join(ROOT, settings["models_dir"]), settings):
-        return JSONResponse({"error": "Some required models are missing. Open the Models panel."},
-                            status_code=400)
-    # Free the voice engine (and its GPU memory) before video generation so the audio model doesn't
-    # hold VRAM while the LTX/ComfyUI engine runs — the QA machine saw video gen slow down when the
-    # CosyVoice subprocess lingered. stop() is a no-op if the engine isn't running; it reloads lazily
-    # on the next synthesize call.
+async def _queue_prompt(params):
+    """Build and queue a prompt on ComfyUI, freeing the voice engine's VRAM first. Returns
+    (prompt_id, seed). Shared by normal generations and character reference-video generations.
+
+    Freeing the voice engine before video generation stops the audio model from holding VRAM while
+    the LTX/ComfyUI engine runs (the QA machine saw video gen slow down when the CosyVoice subprocess
+    lingered). stop() is a no-op if the engine isn't running; it reloads lazily on the next synth."""
     try:
         await asyncio.get_event_loop().run_in_executor(None, tts_svc.stop)
     except Exception:
@@ -450,7 +546,18 @@ async def api_generate(req: Request):
         prompt_id = await comfy.queue_prompt(session, prompt)
     _current["prompt_id"] = prompt_id
     _current["errored"] = False
+    return prompt_id, seed
+
+
+@app.post("/api/generate")
+async def api_generate(req: Request):
+    params = await req.json()
+    if not model_mgr.all_required_present(os.path.join(ROOT, settings["models_dir"]), settings):
+        return JSONResponse({"error": "Some required models are missing. Open the Models panel."},
+                            status_code=400)
+    prompt_id, seed = await _queue_prompt(params)
     _current["project_id"] = params.get("project_id")
+    _current["character"] = None
     timeline = params.get("timeline") or {}
     _current["meta"] = {
         "prompt": timeline.get("global_prompt") or params.get("prompt") or "",
@@ -549,8 +656,9 @@ async def api_project_get(project_id: str):
         return JSONResponse({"ok": False, "error": "Project not found."}, status_code=404)
     store.touch_opened(project_id)
     media = [_media_urls(project_id, it) for it in m.get("media", [])]
+    characters = [_character_urls(project_id, c) for c in m.get("characters", [])]
     return {"ok": True, "id": m["id"], "name": m["name"], "created": m.get("created"),
-            "path": m.get("path"), "media": media}
+            "path": m.get("path"), "media": media, "characters": characters}
 
 
 @app.post("/api/projects/{project_id}/rename")
@@ -600,6 +708,124 @@ async def api_set_lastframe(project_id: str, media_id: str, req: Request):
     if not item:
         return JSONResponse({"ok": False, "error": "Media not found."}, status_code=404)
     return {"ok": True, "lastFrame": f"/api/projects/{project_id}/file/{media_id}/lastframe"}
+
+
+# ------------------------------- characters -------------------------------
+
+@app.get("/api/projects/{project_id}/characters")
+async def api_characters_list(project_id: str):
+    chars = store.list_characters(project_id)
+    return {"ok": True, "characters": [_character_urls(project_id, c) for c in chars]}
+
+
+@app.post("/api/projects/{project_id}/characters")
+async def api_character_create(project_id: str, req: Request):
+    """Register a character and kick off its mood reference-video generation (one segment per built-in
+    mood; low-res + background-music removal forced on; per-mood audio cropped in the graph)."""
+    body = await req.json()
+    if not store.get_project(project_id):
+        return JSONResponse({"ok": False, "error": "Project not found."}, status_code=404)
+    if not model_mgr.all_required_present(os.path.join(ROOT, settings["models_dir"]), settings):
+        return JSONResponse({"ok": False, "error": "Some required models are missing. Open the Models panel."},
+                            status_code=400)
+    if _current.get("prompt_id") and _current.get("character"):
+        return JSONResponse({"ok": False, "error": "A character is already generating — please wait."},
+                            status_code=409)
+    ccfg = settings.get("characters", {})
+    moods_spec = ccfg.get("moods", [])
+    fps = float(settings.get("defaults", {}).get("frame_rate", 24))
+    frames = int(ccfg.get("mood_frames", 72))
+    line = ccfg.get("line", "")
+    timeline, moods_meta = wf.build_character_timeline(
+        body.get("description"), moods_spec, line, fps, frames)
+    char = store.create_character(project_id, body.get("name"), body.get("description"),
+                                  moods_meta, meta={"line": line, "fps": fps})
+    if not char:
+        return JSONResponse({"ok": False, "error": "Could not create the character."}, status_code=404)
+
+    marker = {"project_id": project_id, "character_id": char["id"], "moods": moods_meta, "fps": fps}
+    params = {
+        "timeline": timeline,
+        "resolution": ccfg.get("resolution", "480p"),
+        "aspect": ccfg.get("aspect", "portrait"),
+        "frame_rate": fps,
+        "use_custom_audio": False,
+        "enable_bg_music_removal": True,   # clean, music-free reference clips
+        "character": marker,
+    }
+    # The mood video is thrown away — only its audio matters. Stage 2 is the spatial upscale/refine
+    # pass (barely touches the already-generated audio), so cut it to the minimum; trim stage 1 (which
+    # generates the speech) moderately. Both tunable via config.characters.
+    if ccfg.get("stage1_steps"):
+        params["stage1_steps"] = int(ccfg["stage1_steps"])
+    if ccfg.get("stage2_steps"):
+        params["stage2_steps"] = int(ccfg["stage2_steps"])
+    try:
+        prompt_id, seed = await _queue_prompt(params)
+    except Exception as e:
+        store.set_character_error(project_id, char["id"])
+        return JSONResponse({"ok": False, "error": f"Could not start generation: {e}"}, status_code=500)
+    _current["project_id"] = None       # character gens don't file a normal MediaItem
+    _current["character"] = marker
+    _current["meta"] = {"prompt": timeline.get("global_prompt"), "seed": seed}
+    await hub.broadcast({"type": "queued", "prompt_id": prompt_id, "seed": seed,
+                         "character_id": char["id"]})
+    return {"ok": True, "character": _character_urls(project_id, char)}
+
+
+@app.delete("/api/projects/{project_id}/characters/{character_id}")
+async def api_character_delete(project_id: str, character_id: str):
+    return {"ok": store.delete_character(project_id, character_id)}
+
+
+@app.get("/api/projects/{project_id}/characters/{character_id}/file/{kind}")
+async def api_character_file(project_id: str, character_id: str, kind: str):
+    p = store.character_file_path(project_id, character_id, kind)
+    if not p:
+        return JSONResponse({"error": "Not found."}, status_code=404)
+    return FileResponse(p)
+
+
+@app.post("/api/projects/{project_id}/characters/{character_id}/use-mood")
+async def api_character_use_mood(project_id: str, character_id: str, req: Request):
+    """Copy a character's mood clip into the engine input bucket so the existing /api/tts/synthesize
+    clone path can use it as a reference. Returns the same shape as /api/upload-media plus ref_text."""
+    body = await req.json()
+    mood = body.get("mood")
+    src = store.character_file_path(project_id, character_id, f"mood-{mood}")
+    if not src:
+        return JSONResponse({"ok": False, "error": "That mood clip isn't available."}, status_code=404)
+    char = store.get_character(project_id, character_id) or {}
+    m = next((x for x in char.get("moods", []) if x.get("key") == mood), {})
+    # Fall back to the settings mood spec for tone / the built-in line — covers characters created
+    # before those fields existed, so their reference transcript and tone still auto-fill.
+    ccfg = settings.get("characters", {})
+    spec = next((x for x in ccfg.get("moods", []) if x.get("key") == mood), {})
+    ref_text = m.get("refText") or char.get("meta", {}).get("line", "") or ccfg.get("line", "")
+    tone = m.get("tone") or spec.get("tone", "")
+    input_dir = os.path.join(ROOT, settings["engine_dir"], "input", _MEDIA_SUBFOLDER)
+    os.makedirs(input_dir, exist_ok=True)
+    ext = os.path.splitext(src)[1].lower() or ".flac"
+    name = _safe_name(f"{char.get('name', 'character')}-{mood}{ext}")
+    dest = os.path.join(input_dir, name)
+    if os.path.isfile(dest):
+        stem, e = os.path.splitext(name)
+        i = 1
+        while os.path.isfile(os.path.join(input_dir, f"{stem}_{i}{e}")):
+            i += 1
+        name = f"{stem}_{i}{e}"
+        dest = os.path.join(input_dir, name)
+    import shutil as _shutil
+    _shutil.copy2(src, dest)
+    return {
+        "ok": True,
+        "file": f"{_MEDIA_SUBFOLDER}/{name}",
+        "name": name,
+        "kind": "audio",
+        "url": f"/api/media?filename={name}&subfolder={_MEDIA_SUBFOLDER}&type=input",
+        "ref_text": ref_text,
+        "tone": tone,
+    }
 
 
 @app.get("/api/media")

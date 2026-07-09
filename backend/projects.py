@@ -106,6 +106,7 @@ class ProjectStore:
         if not isinstance(m, dict):
             return None
         m.setdefault("media", [])
+        m.setdefault("characters", [])
         return m
 
     def _save_manifest(self, entry, manifest):
@@ -338,6 +339,135 @@ class ProjectStore:
         if not item or not item.get(field):
             return None
         p = os.path.join(entry["path"], item[field])
+        if not (_within(entry["path"], p) and os.path.isfile(p)):
+            return None
+        return p
+
+    # ------------------------------- characters -------------------------------
+
+    def _get_char(self, manifest, character_id):
+        return next((c for c in manifest.get("characters", []) if c.get("id") == character_id), None)
+
+    def list_characters(self, project_id):
+        manifest = self._load_manifest(self._entry(project_id))
+        return manifest.get("characters", []) if manifest else []
+
+    def get_character(self, project_id, character_id):
+        manifest = self._load_manifest(self._entry(project_id))
+        return self._get_char(manifest, character_id) if manifest else None
+
+    def create_character(self, project_id, name, description, moods_spec, meta=None):
+        """Register a character in the 'generating' state; the mood video renders afterwards and
+        `finalize_character` fills in the video + per-mood reference clips."""
+        entry = self._entry(project_id)
+        manifest = self._load_manifest(entry)
+        if not manifest:
+            return None
+        cid = _new_id()
+        os.makedirs(os.path.join(entry["path"], "characters", cid, "moods"), exist_ok=True)
+        char = {
+            "id": cid,
+            "name": (name or "").strip() or "Character",
+            "description": (description or "").strip(),
+            "created": _now(),
+            "status": "generating",
+            "avatar": None,
+            "video": None,
+            "moods": [{"key": m.get("key"), "label": m.get("label", m.get("key", "")),
+                       "tone": m.get("tone", ""), "clip": None, "refText": "",
+                       "start": m.get("start", 0), "length": m.get("length", 0)}
+                      for m in moods_spec],
+            "meta": meta or {},
+        }
+        manifest["characters"].append(char)
+        self._save_manifest(entry, manifest)
+        return char
+
+    def finalize_character(self, project_id, character_id, video_src, mood_clips):
+        """Copy the rendered video and per-mood clips into the character folder and mark it ready.
+
+        `mood_clips` = [{key, src, refText}]. Missing sources are tolerated (mood stays clip=None)."""
+        entry = self._entry(project_id)
+        manifest = self._load_manifest(entry)
+        if not manifest:
+            return None
+        char = self._get_char(manifest, character_id)
+        if not char:
+            return None
+        base = entry["path"]
+        cdir = os.path.join(base, "characters", character_id)
+        os.makedirs(os.path.join(cdir, "moods"), exist_ok=True)
+        if video_src and os.path.isfile(video_src):
+            ext = os.path.splitext(video_src)[1].lower() or ".mp4"
+            shutil.copy2(video_src, os.path.join(cdir, f"video{ext}"))
+            char["video"] = f"characters/{character_id}/video{ext}"
+        by_key = {c.get("key"): c for c in (mood_clips or [])}
+        for mood in char["moods"]:
+            clip = by_key.get(mood["key"])
+            if not clip:
+                continue
+            src = clip.get("src")
+            if src and os.path.isfile(src):
+                ext = os.path.splitext(src)[1].lower() or ".flac"
+                dst = os.path.join(cdir, "moods", f"{mood['key']}{ext}")
+                shutil.copy2(src, dst)
+                mood["clip"] = f"characters/{character_id}/moods/{mood['key']}{ext}"
+            # The transcript anchors zero-shot cloning; fall back to the known line we asked the
+            # character to speak so every mood has a usable ref_text even if Whisper transcription
+            # came back empty (otherwise only some moods would auto-fill).
+            mood["refText"] = clip.get("refText") or char.get("meta", {}).get("line", "")
+        char["status"] = "ready"
+        self._save_manifest(entry, manifest)
+        return char
+
+    def set_character_error(self, project_id, character_id):
+        entry = self._entry(project_id)
+        manifest = self._load_manifest(entry)
+        if not manifest:
+            return None
+        char = self._get_char(manifest, character_id)
+        if not char:
+            return None
+        char["status"] = "error"
+        self._save_manifest(entry, manifest)
+        return char
+
+    def delete_character(self, project_id, character_id):
+        entry = self._entry(project_id)
+        manifest = self._load_manifest(entry)
+        if not manifest:
+            return False
+        if not self._get_char(manifest, character_id):
+            return False
+        base = entry["path"]
+        cdir = os.path.join(base, "characters", character_id)
+        if os.path.isdir(cdir) and _within(base, cdir):
+            shutil.rmtree(cdir, ignore_errors=True)
+        manifest["characters"] = [c for c in manifest["characters"] if c.get("id") != character_id]
+        self._save_manifest(entry, manifest)
+        return True
+
+    def character_file_path(self, project_id, character_id, kind):
+        """Absolute path of a character file, guarded to the project dir.
+
+        kind: 'video', 'avatar', or 'mood-<key>' (e.g. 'mood-happy')."""
+        entry = self._entry(project_id)
+        manifest = self._load_manifest(entry)
+        if not manifest:
+            return None
+        char = self._get_char(manifest, character_id)
+        if not char:
+            return None
+        rel = None
+        if kind in ("video", "avatar"):
+            rel = char.get(kind)
+        elif kind.startswith("mood-"):
+            key = kind[len("mood-"):]
+            mood = next((m for m in char.get("moods", []) if m.get("key") == key), None)
+            rel = mood.get("clip") if mood else None
+        if not rel:
+            return None
+        p = os.path.join(entry["path"], rel)
         if not (_within(entry["path"], p) and os.path.isfile(p)):
             return None
         return p

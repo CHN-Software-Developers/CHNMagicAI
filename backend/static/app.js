@@ -39,6 +39,8 @@ const state = {
   currentProjectId: null, // the project a generation files into
   currentProject: null, // its loaded manifest (media list)
   lastMediaId: null, // media id of the just-finished generation (for last-frame upload)
+  libTab: "media", // library sub-tab: media | characters
+  characters: [], // current project's characters
 };
 
 let segId = 1;
@@ -274,6 +276,7 @@ async function openProject(id) {
   }
   state.currentProjectId = id;
   state.currentProject = res;
+  state.libTab = "media";
   renderLibrary();
   setScreen("library");
 }
@@ -291,21 +294,195 @@ function renderLibrary() {
   const proj = state.currentProject;
   if (!proj) return;
   $("libTitle").textContent = proj.name || "Project";
-  const media = proj.media || [];
-  $("libSub").textContent = `${media.length} item${media.length === 1 ? "" : "s"}`;
+  state.characters = proj.characters || [];
+  renderMedia();
+  renderVoices();
+  renderCharacters();
+  setLibTab(state.libTab);
+}
+
+// Media tab holds ONLY compound generations (video + last frame + its audio). Standalone generated
+// speech clips (type "voice") live in their own Voices tab.
+function projectGenerations() {
+  return ((state.currentProject && state.currentProject.media) || []).filter(
+    (m) => m.type !== "voice",
+  );
+}
+function projectVoices() {
+  return ((state.currentProject && state.currentProject.media) || []).filter(
+    (m) => m.type === "voice",
+  );
+}
+
+function renderMedia() {
+  const gens = projectGenerations();
   const grid = $("mediaGrid");
-  const empty = $("libraryEmpty");
   grid.innerHTML = "";
-  if (!media.length) {
-    empty.classList.remove("hidden");
-    return;
-  }
-  empty.classList.add("hidden");
-  // newest first
-  media
+  $("libraryEmpty").classList.toggle("hidden", gens.length > 0);
+  gens
     .slice()
     .reverse()
     .forEach((m) => grid.appendChild(buildMediaCard(m)));
+}
+
+function renderVoices() {
+  const voices = projectVoices();
+  const grid = $("voiceGrid");
+  grid.innerHTML = "";
+  $("voicesEmpty").classList.toggle("hidden", voices.length > 0);
+  voices
+    .slice()
+    .reverse()
+    .forEach((m) => grid.appendChild(buildMediaCard(m)));
+}
+
+// Toggle the Media / Voices / Characters sub-tabs (panes + contextual "New …" button + sub-label).
+function setLibTab(name) {
+  state.libTab = name;
+  document
+    .querySelectorAll("#libTabs .lib-tab")
+    .forEach((t) => t.classList.toggle("active", t.dataset.libtab === name));
+  document
+    .querySelectorAll("#screenLibrary .lib-pane")
+    .forEach((p) => p.classList.toggle("hidden", p.dataset.libpane !== name));
+  $("newGeneration").classList.toggle("hidden", name !== "media");
+  $("newCharacter").classList.toggle("hidden", name !== "characters");
+  let n, unit;
+  if (name === "characters") {
+    n = state.characters.length;
+    unit = ["character", "characters"];
+  } else if (name === "voices") {
+    n = projectVoices().length;
+    unit = ["voice", "voices"];
+  } else {
+    n = projectGenerations().length;
+    unit = ["item", "items"];
+  }
+  $("libSub").textContent = `${n} ${n === 1 ? unit[0] : unit[1]}`;
+}
+
+function renderCharacters() {
+  const grid = $("characterGrid");
+  const chars = state.characters || [];
+  grid.innerHTML = "";
+  $("charactersEmpty").classList.toggle("hidden", chars.length > 0);
+  chars
+    .slice()
+    .reverse()
+    .forEach((c) => grid.appendChild(buildCharacterCard(c)));
+}
+
+function buildCharacterCard(c) {
+  const card = document.createElement("article");
+  card.className = "character-card" + (c.status === "generating" ? " generating" : "");
+  card.dataset.id = c.id;
+  // Each mood with a clip is a play control (previews that mood's reference voice); moods without a
+  // clip render as a dim, non-interactive chip.
+  const moodChips = (c.moods || [])
+    .map((m) =>
+      m.clip
+        ? `<button type="button" class="mood-chip play" data-clip="${m.clip}">` +
+          `<span class="mc-play-ico">▶</span>${escapeHtml(m.label || m.key)}</button>`
+        : `<span class="mood-chip empty">${escapeHtml(m.label || m.key)}</span>`,
+    )
+    .join("");
+  let statusRow = "";
+  if (c.status === "generating") {
+    statusRow =
+      `<div class="char-generating"><span class="char-spinner"></span> Generating reference video…</div>`;
+  } else if (c.status === "error") {
+    statusRow = `<div class="char-error">Generation failed. Delete and try again.</div>`;
+  }
+  const ready = (c.moods || []).filter((m) => m.clip).length;
+  card.innerHTML =
+    `<div class="char-avatar">${c.avatar ? `<img src="${c.avatar}" alt="" />` : "🎭"}</div>` +
+    `<div class="char-body">` +
+    `<h3 class="char-name">${escapeHtml(c.name || "Character")}</h3>` +
+    (c.description
+      ? `<p class="char-desc">${escapeHtml(c.description)}</p>`
+      : "") +
+    statusRow +
+    `<div class="mood-chips">${moodChips}</div>` +
+    (c.status === "ready"
+      ? `<p class="char-meta">${ready} mood voice${ready === 1 ? "" : "s"} ready — tap to preview</p>`
+      : "") +
+    `</div>` +
+    `<audio class="mood-audio hidden"></audio>` +
+    `<button class="pc-del" data-del="1" title="Delete character">${TRASH_SVG}</button>`;
+  const audio = card.querySelector(".mood-audio");
+  card.addEventListener("click", (e) => {
+    if (e.target.closest("[data-del]")) {
+      e.stopPropagation();
+      deleteCharacter(c.id);
+      return;
+    }
+    const play = e.target.closest(".mood-chip.play");
+    if (play) {
+      e.stopPropagation();
+      const url = play.dataset.clip;
+      const wasPlaying = audio.dataset.clip === url && !audio.paused;
+      card
+        .querySelectorAll(".mood-chip.play.playing")
+        .forEach((b) => b.classList.remove("playing"));
+      if (wasPlaying) {
+        audio.pause();
+        return;
+      }
+      audio.src = url;
+      audio.dataset.clip = url;
+      play.classList.add("playing");
+      audio.onended = () => play.classList.remove("playing");
+      audio.play().catch(() => play.classList.remove("playing"));
+    }
+  });
+  return card;
+}
+
+function openCharacterModal() {
+  $("charName").value = "";
+  $("charDesc").value = "";
+  $("charStatus").textContent = "";
+  $("charGenerate").disabled = false;
+  openModal("characterModal");
+}
+
+async function createCharacter() {
+  const name = $("charName").value.trim();
+  const description = $("charDesc").value.trim();
+  if (!description) {
+    $("charStatus").textContent = "Describe the character first.";
+    return;
+  }
+  if (!state.currentProjectId) return;
+  $("charGenerate").disabled = true;
+  $("charStatus").textContent = "Starting generation…";
+  let res = null;
+  try {
+    res = await api(`/api/projects/${state.currentProjectId}/characters`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, description }),
+    });
+  } catch {
+    res = null;
+  }
+  if (!res || !res.ok) {
+    $("charStatus").textContent = (res && res.error) || "Could not start generation.";
+    $("charGenerate").disabled = false;
+    return;
+  }
+  closeModal("characterModal");
+  await refreshLibrary();
+  setLibTab("characters");
+}
+
+async function deleteCharacter(id) {
+  if (!confirm("Delete this character and its reference clips?")) return;
+  await api(`/api/projects/${state.currentProjectId}/characters/${id}`, {
+    method: "DELETE",
+  });
+  await refreshLibrary();
+  setLibTab("characters");
 }
 
 function buildMediaCard(m) {
@@ -1390,6 +1567,15 @@ function handleWS(m) {
     case "complete":
       onComplete(m.video_url, m);
       break;
+    case "character_complete":
+      // A character's reference video finished (or errored) — refresh the library so the card flips
+      // out of its generating state. Only if it belongs to the project we're currently viewing.
+      if (state.currentProjectId === m.project_id) {
+        refreshLibrary().then(() => {
+          if (state.screen === "library") setLibTab("characters");
+        });
+      }
+      break;
     case "error":
       showGenError(m.message || "Error");
       break;
@@ -1548,11 +1734,11 @@ async function reloadModels() {
 
 /* ------------------------------- voice / TTS ------------------------------- */
 // Pending (not-yet-committed) generated speech lives here so the user can preview
-// and regenerate before dropping it on the timeline. `refFile` is the uploaded
-// reference clip (relative engine-input path) used for zero-shot cloning.
-// `mode` is 'clone' (Clone-a-voice tab, needs a reference clip) or 'sft' (Text-to-audio tab, the
-// engine's built-in narrator voice). The reference transcript lives in the visible #ttsRefText box.
-const tts = { pending: null, refFile: null, installed: false, mode: "clone" };
+// and regenerate before dropping it on the timeline. Voices are always cloned (zero-shot) from a
+// reference clip: `refSource` is 'character' (a project character's mood clip) or 'upload' (a file
+// the user picks); `refFile` is the resolved engine-input path of that clip. The reference transcript
+// lives in the visible, editable #ttsRefText box — the model clones the voice USING that text.
+const tts = { pending: null, refFile: null, installed: false, refSource: "character" };
 
 function openAudioModal() {
   switchAudioTab("upload");
@@ -1561,21 +1747,105 @@ function openAudioModal() {
 }
 
 function switchAudioTab(name) {
-  // Both speech tabs ('speak' = clone, 'tts' = text-to-audio) share one pane; only the input mode
-  // and the reference block differ.
-  const pane = name === "tts" ? "speak" : name;
   document
     .querySelectorAll("#audioTabs .tab")
     .forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
   document
     .querySelectorAll("#audioModal .tab-pane")
-    .forEach((p) => p.classList.toggle("hidden", p.dataset.pane !== pane));
-  if (pane !== "speak") return;
-  tts.mode = name === "tts" ? "sft" : "clone";
-  $("ttsRefBlock").classList.toggle("hidden", tts.mode !== "clone");
-  $("ttsPlainNote").classList.toggle("hidden", tts.mode !== "sft");
+    .forEach((p) => p.classList.toggle("hidden", p.dataset.pane !== name));
+  if (name !== "speak") return;
+  // "Clone a voice" — reference comes from a project character's mood clip, or an uploaded clip.
+  populateCharacterRef();
+  const hasChars = (state.characters || []).some(
+    (c) => c.status === "ready" && (c.moods || []).some((m) => m.clip),
+  );
+  setRefSource(hasChars ? "character" : "upload");
   resetTtsPreview();
   refreshTtsStatus();
+}
+
+// Toggle the reference source: a character's mood clip vs an uploaded file.
+function setRefSource(src) {
+  tts.refSource = src;
+  document
+    .querySelectorAll("#ttsRefSource .ref-src-btn")
+    .forEach((b) => b.classList.toggle("active", b.dataset.src === src));
+  $("ttsRefChar").classList.toggle("hidden", src !== "character");
+  $("ttsRefUpload").classList.toggle("hidden", src !== "upload");
+  tts.refFile = null;
+  if (src === "character") {
+    selectCharacterMood();
+  } else {
+    $("ttsRefName").textContent = "No reference selected";
+    $("ttsRefText").value = "";
+  }
+}
+
+function populateCharacterRef() {
+  const csel = $("ttsCharSelect");
+  const ready = (state.characters || []).filter(
+    (c) => c.status === "ready" && (c.moods || []).some((m) => m.clip),
+  );
+  csel.innerHTML = "";
+  if (!ready.length) {
+    csel.innerHTML = '<option value="">No characters yet…</option>';
+    $("ttsMoodSelect").innerHTML = "";
+    return;
+  }
+  ready.forEach((c) => {
+    const o = document.createElement("option");
+    o.value = c.id;
+    o.textContent = c.name || "Character";
+    csel.appendChild(o);
+  });
+  populateMoodOptions();
+}
+
+function populateMoodOptions() {
+  const c = (state.characters || []).find((x) => x.id === $("ttsCharSelect").value);
+  const msel = $("ttsMoodSelect");
+  msel.innerHTML = "";
+  ((c && c.moods) || [])
+    .filter((m) => m.clip)
+    .forEach((m) => {
+      const o = document.createElement("option");
+      o.value = m.key;
+      o.textContent = m.label || m.key;
+      msel.appendChild(o);
+    });
+}
+
+// Load the selected character+mood clip into the engine input bucket and prefill the transcript.
+async function selectCharacterMood() {
+  if (tts.refSource !== "character") return;
+  const cid = $("ttsCharSelect").value;
+  const mood = $("ttsMoodSelect").value;
+  tts.refFile = null;
+  if (!cid || !mood || !state.currentProjectId) return;
+  $("ttsStatus").textContent = "Loading reference voice…";
+  try {
+    const res = await api(
+      `/api/projects/${state.currentProjectId}/characters/${cid}/use-mood`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mood }),
+      },
+    );
+    if (res.ok) {
+      tts.refFile = res.file;
+      $("ttsRefText").value = res.ref_text || "";
+      // Prefill the tone/emotion to match the chosen mood (reinforces the reference's delivery).
+      $("ttsInstruct").value = res.tone || "";
+      $("ttsStatus").textContent = res.ref_text
+        ? ""
+        : "No transcript stored — type what the clip says below.";
+    } else {
+      $("ttsStatus").textContent = res.error || "Couldn't load that mood clip.";
+    }
+  } catch {
+    $("ttsStatus").textContent = "Couldn't load that mood clip.";
+  }
 }
 
 function populateTtsLangs(langs) {
@@ -1732,16 +2002,18 @@ async function ttsGenerate() {
     $("ttsStatus").textContent = "Enter the dialog to speak.";
     return;
   }
-  const mode = tts.mode === "sft" ? "sft" : "clone";
   const instruct = $("ttsInstruct").value.trim();
   const refText = $("ttsRefText").value.trim();
-  if (mode === "clone" && !tts.refFile) {
-    $("ttsStatus").textContent = "Choose a reference clip first.";
+  if (!tts.refFile) {
+    $("ttsStatus").textContent =
+      tts.refSource === "character"
+        ? "Pick a character and mood first."
+        : "Choose a reference clip first.";
     return;
   }
   // Cloning without a tone/instruction uses zero-shot, which REQUIRES the reference transcript —
   // an empty one makes the model produce garbled/foreign-sounding speech. Block it with a clear nudge.
-  if (mode === "clone" && !instruct && !refText) {
+  if (!instruct && !refText) {
     $("ttsStatus").textContent =
       "Add what the reference clip says (the box above) — it's needed to clone the voice.";
     $("ttsRefText").focus();
@@ -1750,7 +2022,7 @@ async function ttsGenerate() {
   const body = {
     project_id: state.currentProjectId,
     text,
-    mode,
+    mode: "clone",
     instruct,
     ref_text: refText,
     ref_file: tts.refFile,
@@ -1922,6 +2194,14 @@ function wireEvents() {
     openModels();
   });
   $("ttsRefBtn").addEventListener("click", pickRefVoice);
+  document.querySelectorAll("#ttsRefSource .ref-src-btn").forEach((b) =>
+    b.addEventListener("click", () => setRefSource(b.dataset.src)),
+  );
+  $("ttsCharSelect").addEventListener("change", () => {
+    populateMoodOptions();
+    selectCharacterMood();
+  });
+  $("ttsMoodSelect").addEventListener("change", selectCharacterMood);
   $("ttsGenerate").addEventListener("click", ttsGenerate);
   $("ttsRegen").addEventListener("click", ttsGenerate);
   $("ttsAdd").addEventListener("click", ttsAddToTimeline);
@@ -2071,6 +2351,14 @@ function wireEvents() {
   $("newGeneration").addEventListener("click", enterStudio);
   $("newGenerationEmpty").addEventListener("click", enterStudio);
   $("libRename").addEventListener("click", renameCurrentProject);
+  // Library sub-tabs + characters
+  document.querySelectorAll("#libTabs .lib-tab").forEach((t) =>
+    t.addEventListener("click", () => setLibTab(t.dataset.libtab)),
+  );
+  $("newCharacter").addEventListener("click", openCharacterModal);
+  $("newCharacterEmpty").addEventListener("click", openCharacterModal);
+  $("closeCharacter").addEventListener("click", () => closeModal("characterModal"));
+  $("charGenerate").addEventListener("click", createCharacter);
 }
 
 async function renameCurrentProject() {

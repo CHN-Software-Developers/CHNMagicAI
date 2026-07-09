@@ -33,46 +33,19 @@
   "model_overrides": {},
   "resolution_presets": {
     "480p": {
-      "landscape": [
-        854,
-        480
-      ],
-      "portrait": [
-        480,
-        854
-      ],
-      "square": [
-        640,
-        640
-      ]
+      "landscape": [854, 480],
+      "portrait": [480, 854],
+      "square": [640, 640]
     },
     "720p": {
-      "landscape": [
-        1280,
-        720
-      ],
-      "portrait": [
-        720,
-        1280
-      ],
-      "square": [
-        960,
-        960
-      ]
+      "landscape": [1280, 720],
+      "portrait": [720, 1280],
+      "square": [960, 960]
     },
     "1080p": {
-      "landscape": [
-        1920,
-        1080
-      ],
-      "portrait": [
-        1080,
-        1920
-      ],
-      "square": [
-        1440,
-        1440
-      ]
+      "landscape": [1920, 1080],
+      "portrait": [1080, 1920],
+      "square": [1440, 1440]
     }
   },
   "defaults": {
@@ -89,6 +62,46 @@
     "seed": 0,
     "seed_mode": "randomize",
     "enable_bg_music_removal": false
+  },
+  "characters": {
+    "line": "I can't believe this.",
+    "mood_frames": 72,
+    "resolution": "480p",
+    "aspect": "portrait",
+    "stage1_steps": 6,
+    "stage2_steps": 1,
+    "moods": [
+      {
+        "key": "neutral",
+        "label": "Neutral",
+        "prompt": "speaking calmly and plainly, neutral relaxed expression",
+        "tone": "Speak in a calm, neutral tone."
+      },
+      {
+        "key": "happy",
+        "label": "Happy / Laughing",
+        "prompt": "laughing warmly and speaking cheerfully, bright joyful smile",
+        "tone": "Speak in a cheerful, excited, happy tone."
+      },
+      {
+        "key": "sad",
+        "label": "Sad / Crying",
+        "prompt": "crying and speaking through tears, sorrowful downcast expression",
+        "tone": "Speak in a sad, sorrowful, crying voice."
+      },
+      {
+        "key": "angry",
+        "label": "Angry",
+        "prompt": "speaking angrily with a raised sharp voice, furious tense expression",
+        "tone": "Speak in an angry, intense tone."
+      },
+      {
+        "key": "excited",
+        "label": "Excited",
+        "prompt": "speaking with high energy and excitement, wide-eyed enthusiastic expression",
+        "tone": "Speak with high, excited energy."
+      }
+    ]
   },
   "tts": {
     "enabled": true,

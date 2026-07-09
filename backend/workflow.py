@@ -53,6 +53,58 @@ RAW_AUDIO_ID = "24"            # LTXVAudioVAEDecode: raw generated audio (music 
 CINEMATIC_SEP_ID = "157"       # CinematicAudioSeparation; output 0 = music_removed (speech+effects)
 
 
+def build_character_timeline(description, moods_spec, line, fps, frames_per_mood):
+    """Build a timeline for a character's reference-audio video.
+
+    One text segment per mood, in which the same character speaks the same built-in `line` while
+    performing that mood. LTX generates the speech natively (no custom audio segments). Returns
+    (timeline_dict, moods_meta) where moods_meta = [{key,label,start,length}] — the frame ranges the
+    caller later crops the per-mood reference clips from.
+    """
+    frames_per_mood = int(frames_per_mood) or 72
+    desc = (description or "").strip()
+    global_prompt = (
+        (desc + ". " if desc else "")
+        + f'A single person talking directly to camera, portrait framing, clear lip-synced speech, '
+        'plain studio background, steady shot, saying "{line}" repeatedly in different moods: Neutral, Happy, Sad, Angry, Excited.'
+    )
+    segments, moods_meta = [], []
+    cursor = 0
+    for i, mood in enumerate(moods_spec):
+        prompt = f'The character {mood.get("prompt", "")}, saying "{line}".'
+        segments.append({
+            "id": f"mood{i}",
+            "start": cursor,
+            "length": frames_per_mood,
+            "prompt": prompt,
+            "type": "text",
+            "isEndFrame": False,
+        })
+        moods_meta.append({
+            "key": mood.get("key"),
+            "label": mood.get("label", mood.get("key", "")),
+            "tone": mood.get("tone", ""),
+            "start": cursor,
+            "length": frames_per_mood,
+        })
+        cursor += frames_per_mood
+    timeline = {
+        "mainTrackEnabled": True,
+        "audioTrackEnabled": True,
+        "motionTrackEnabled": False,
+        "global_prompt": global_prompt,
+        "retakeMode": False,
+        "overrideAudio": False,
+        "inpaint_audio": True,
+        "normalStartFrame": 0,
+        "normalDurationFrames": cursor,
+        "segments": segments,
+        "motionSegments": [],
+        "audioSegments": [],
+    }
+    return timeline, moods_meta
+
+
 def load_template():
     with open(os.path.abspath(TEMPLATE_PATH), "r", encoding="utf-8") as f:
         return json.load(f)
@@ -183,5 +235,35 @@ def build_prompt(params, settings):
             prompt[SAVEVIDEO_ID]["inputs"]["video"] = [BASE_CREATEVIDEO_ID, 0]
         if SAVEAUDIO_ID in prompt:
             prompt[SAVEAUDIO_ID]["inputs"]["audio"] = [RAW_AUDIO_ID, 0]
+
+    # --- character mood-clip extraction ---------------------------------------------
+    # For a character reference-video generation, crop the generated audio into one clip per mood.
+    # `enable_bg_music_removal` is forced on by the caller so the CinematicAudioSeparation chain
+    # (156/157/158) stays in the graph and node 157 out 0 is the clean, music-free speech track we
+    # crop from (same track the character video's audio is muxed from). Each crop is saved with a
+    # `mood/<charId>-<moodKey>` prefix so `_on_complete` can match the outputs back to the mood.
+    character = params.get("character")
+    if character and CINEMATIC_SEP_ID in prompt:
+        char_id = character.get("character_id", "char")
+        for i, mood in enumerate(character.get("moods", [])):
+            start = float(mood.get("start", 0)) / fps if fps else 0.0
+            dur = float(mood.get("length", 0)) / fps if fps else 0.0
+            trim_id = f"c_trim_{i}"
+            save_id = f"c_save_{i}"
+            prompt[trim_id] = {
+                "class_type": "TrimAudioDuration",
+                "_meta": {"title": f"Crop {mood.get('key')}"},
+                "inputs": {"audio": [CINEMATIC_SEP_ID, 0], "start_index": round(start, 3),
+                           "duration": round(dur, 3)},
+            }
+            # FLAC = lossless (best for a voice print) and needs no quality sub-option; SaveAudioAdvanced
+            # only offers flac/mp3/opus (no wav). CosyVoice loads flac fine via torchaudio.
+            prompt[save_id] = {
+                "class_type": "SaveAudioAdvanced",
+                "_meta": {"title": f"Mood {mood.get('key')}"},
+                "inputs": {"audio": [trim_id, 0],
+                           "filename_prefix": f"mood/{char_id}-{mood.get('key')}",
+                           "format": "flac"},
+            }
 
     return prompt, seed

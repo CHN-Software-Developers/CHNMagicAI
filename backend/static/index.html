@@ -88,21 +88,64 @@
             <h2 class="lib-title" id="libTitle">Project</h2>
             <p class="lib-sub" id="libSub">0 items</p>
           </div>
-          <div class="lib-actions">
+          <div class="lib-actions" id="libActions">
             <button class="btn btn-ghost btn-sm" id="libRename">✎ Rename</button>
             <button class="btn btn-primary btn-lg" id="newGeneration">
               ＋ New generation
             </button>
+            <button class="btn btn-primary btn-lg hidden" id="newCharacter">
+              ＋ New character
+            </button>
           </div>
         </div>
-        <div id="mediaGrid" class="media-grid"></div>
-        <div id="libraryEmpty" class="ws-empty hidden">
-          <div class="ws-empty-icon">🎞</div>
-          <h3>No media yet</h3>
-          <p>Generate your first video in this project.</p>
-          <button class="btn btn-primary" id="newGenerationEmpty">
-            ＋ New generation
-          </button>
+
+        <div class="lib-tabs" id="libTabs">
+          <button class="lib-tab active" data-libtab="media">🎞 Media</button>
+          <button class="lib-tab" data-libtab="voices">🗣 Voices</button>
+          <button class="lib-tab" data-libtab="characters">🎭 Characters</button>
+        </div>
+
+        <!-- Media pane -->
+        <div class="lib-pane" data-libpane="media">
+          <div id="mediaGrid" class="media-grid"></div>
+          <div id="libraryEmpty" class="ws-empty hidden">
+            <div class="ws-empty-icon">🎞</div>
+            <h3>No media yet</h3>
+            <p>Generate your first video in this project.</p>
+            <button class="btn btn-primary" id="newGenerationEmpty">
+              ＋ New generation
+            </button>
+          </div>
+        </div>
+
+        <!-- Voices pane (standalone generated speech clips) -->
+        <div class="lib-pane hidden" data-libpane="voices">
+          <div id="voiceGrid" class="media-grid"></div>
+          <div id="voicesEmpty" class="ws-empty hidden">
+            <div class="ws-empty-icon">🗣</div>
+            <h3>No voices yet</h3>
+            <p>
+              Generated speech clips land here. In a shot, use the timeline's
+              ＋ Audio ▸ Clone a voice to make one.
+            </p>
+          </div>
+        </div>
+
+        <!-- Characters pane -->
+        <div class="lib-pane hidden" data-libpane="characters">
+          <div id="characterGrid" class="character-grid"></div>
+          <div id="charactersEmpty" class="ws-empty hidden">
+            <div class="ws-empty-icon">🎭</div>
+            <h3>No characters yet</h3>
+            <p>
+              Create a character to generate its voice — the app makes a short
+              clip of it speaking in each mood, then reuses those as reference
+              voices on your timeline.
+            </p>
+            <button class="btn btn-primary" id="newCharacterEmpty">
+              ＋ New character
+            </button>
+          </div>
         </div>
       </div>
     </section>
@@ -534,6 +577,46 @@
       </div>
     </div>
 
+    <!-- New-character modal -->
+    <div id="characterModal" class="modal">
+      <div class="modal-box modal-box-sm">
+        <div class="modal-head">
+          <h2>New character</h2>
+          <button id="closeCharacter" class="btn btn-ghost">✕</button>
+        </div>
+        <div class="char-form">
+          <label class="tts-field">
+            <span class="tts-field-label">Name</span>
+            <input id="charName" type="text" placeholder="e.g. Maya" />
+          </label>
+          <div class="tts-field">
+            <span class="tts-field-label"
+              >Description
+              <small>(appearance, age, voice, personality)</small></span
+            >
+            <div class="ta-shell">
+              <textarea
+                id="charDesc"
+                rows="4"
+                placeholder="e.g. A woman in her 30s with a warm, slightly raspy voice, short curly brown hair, cheerful and energetic."
+              ></textarea>
+            </div>
+          </div>
+          <p class="hint">
+            The app generates a short low-res clip of this character speaking
+            in each mood (Neutral, Happy, Sad, Angry, Excited), then extracts a
+            reference voice per mood. This takes a little while.
+          </p>
+          <div class="char-form-actions">
+            <span id="charStatus" class="tts-status"></span>
+            <button class="btn btn-primary" id="charGenerate">
+              Generate character
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Add-audio modal: upload a file OR generate speech -->
     <div id="audioModal" class="modal">
       <div class="modal-box">
@@ -544,7 +627,6 @@
         <div class="tabs" id="audioTabs">
           <button class="tab active" data-tab="upload">⬆ Upload audio</button>
           <button class="tab" data-tab="speak">🗣 Clone a voice</button>
-          <button class="tab" data-tab="tts">📝 Text to audio</button>
         </div>
 
         <!-- Upload tab -->
@@ -555,7 +637,7 @@
           </button>
         </div>
 
-        <!-- Speech tab (shared by "Clone a voice" and "Text to audio"; JS toggles the mode) -->
+        <!-- Speech tab — clone a voice from a project character's mood clip, or an uploaded clip. -->
         <div class="tab-pane hidden" data-pane="speak">
           <div id="ttsUnavailable" class="tts-note hidden">
             The voice engine isn't installed yet.
@@ -566,10 +648,26 @@
           <div id="ttsForm" class="tts-grid">
             <!-- LEFT: what to say + how -->
             <div class="tts-left">
-              <!-- Reference voice (Clone tab only) -->
+              <!-- Reference voice: from a character's mood clip, or an uploaded clip. -->
               <div class="tts-ref-block" id="ttsRefBlock">
                 <span class="tts-field-label">Reference voice</span>
-                <div class="tts-ref-row">
+                <div class="ref-src" id="ttsRefSource">
+                  <button type="button" class="ref-src-btn active" data-src="character">
+                    From a character
+                  </button>
+                  <button type="button" class="ref-src-btn" data-src="upload">
+                    Upload a clip
+                  </button>
+                </div>
+                <!-- Character + mood picker -->
+                <div class="tts-ref-char" id="ttsRefChar">
+                  <select id="ttsCharSelect" class="tts-ref-select">
+                    <option value="">No characters yet…</option>
+                  </select>
+                  <select id="ttsMoodSelect" class="tts-ref-select"></select>
+                </div>
+                <!-- Upload picker -->
+                <div class="tts-ref-row hidden" id="ttsRefUpload">
                   <button class="btn btn-sm" id="ttsRefBtn">
                     Choose reference clip…
                   </button>
@@ -593,11 +691,6 @@
                   </div>
                 </div>
               </div>
-              <!-- Built-in voice note (Text-to-audio tab only) -->
-              <p class="tts-plain-note hidden" id="ttsPlainNote">
-                Uses the voice engine's built-in narrator voice — no reference
-                clip needed.
-              </p>
 
               <label class="tts-field">
                 <span class="tts-field-label">Language</span>
