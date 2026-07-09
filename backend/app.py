@@ -7,7 +7,7 @@ import json
 import os
 
 import aiohttp
-from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import JSONResponse, Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -352,15 +352,19 @@ def _character_urls(project_id, char):
     for m in char.get("moods", []):
         moods.append({
             "key": m.get("key"), "label": m.get("label"), "tone": m.get("tone", ""),
+            "line": m.get("line", ""),
             "clip": (f"/api/projects/{project_id}/characters/{cid}/file/mood-{m['key']}"
                      if m.get("clip") else None),
             "hasRefText": bool(m.get("refText")),
+            "startSec": m.get("startSec"), "endSec": m.get("endSec"),
         })
     return {
         "id": cid, "name": char.get("name"), "description": char.get("description"),
         "created": char.get("created"), "status": char.get("status"),
         "video": f"/api/projects/{project_id}/characters/{cid}/file/video" if char.get("video") else None,
         "avatar": f"/api/projects/{project_id}/characters/{cid}/file/avatar" if char.get("avatar") else None,
+        "fullAudio": (f"/api/projects/{project_id}/characters/{cid}/file/full"
+                      if char.get("fullAudio") else None),
         "moods": moods,
     }
 
@@ -389,10 +393,14 @@ async def _finalize_character(history, character):
     ok = False
     try:
         video = _find_video_output(history) if history else None
+        full_entry = _find_audio_output_named(history, f"{char_id}-full") if history else None
+        full_src = _output_src_path(full_entry) if full_entry else None
         mood_clips = []
         for mood in character.get("moods", []):
             entry = _find_audio_output_named(history, f"{char_id}-{mood['key']}") if history else None
             src = _output_src_path(entry) if entry else None
+            # Transcribe the ACTUAL generated clip (best-effort) so the reference transcript reflects
+            # what the clip really says, not the prompt line. Empty if Whisper isn't available.
             ref_text = ""
             if src and os.path.isfile(src):
                 try:
@@ -404,7 +412,7 @@ async def _finalize_character(history, character):
             mood_clips.append({"key": mood["key"], "src": src, "refText": ref_text})
         result = await asyncio.get_event_loop().run_in_executor(
             None, lambda: store.finalize_character(
-                project_id, char_id, _output_src_path(video), mood_clips))
+                project_id, char_id, _output_src_path(video), mood_clips, full_src=full_src))
         ok = bool(result)
     except Exception:
         ok = False
@@ -797,11 +805,22 @@ async def api_character_use_mood(project_id: str, character_id: str, req: Reques
         return JSONResponse({"ok": False, "error": "That mood clip isn't available."}, status_code=404)
     char = store.get_character(project_id, character_id) or {}
     m = next((x for x in char.get("moods", []) if x.get("key") == mood), {})
-    # Fall back to the settings mood spec for tone / the built-in line — covers characters created
-    # before those fields existed, so their reference transcript and tone still auto-fill.
     ccfg = settings.get("characters", {})
     spec = next((x for x in ccfg.get("moods", []) if x.get("key") == mood), {})
-    ref_text = m.get("refText") or char.get("meta", {}).get("line", "") or ccfg.get("line", "")
+    # The reference transcript should reflect what the CLIP actually says (not the prompt line). Use
+    # the stored transcript; if it's missing (Whisper was unavailable at generation time), transcribe
+    # the clip now and persist it. Tone can still fall back to the settings spec — it's just delivery
+    # guidance, not the transcript.
+    ref_text = (m.get("refText") or "").strip()
+    if not ref_text:
+        try:
+            data_t, status_t = await tts_svc.transcribe({"audio": src})
+            if status_t == 200 and data_t.get("ok"):
+                ref_text = (data_t.get("text") or "").strip()
+                if ref_text:
+                    store.set_mood_reftext(project_id, character_id, mood, ref_text)
+        except Exception:
+            pass
     tone = m.get("tone") or spec.get("tone", "")
     input_dir = os.path.join(ROOT, settings["engine_dir"], "input", _MEDIA_SUBFOLDER)
     os.makedirs(input_dir, exist_ok=True)
@@ -826,6 +845,43 @@ async def api_character_use_mood(project_id: str, character_id: str, req: Reques
         "ref_text": ref_text,
         "tone": tone,
     }
+
+
+@app.post("/api/projects/{project_id}/characters/{character_id}/moods/{mood}/clip")
+async def api_character_mood_clip(project_id: str, character_id: str, mood: str,
+                                  file: UploadFile = File(...),
+                                  start: float = Form(0.0), end: float = Form(0.0)):
+    """Replace a mood's reference clip with a user-edited crop (a WAV exported by the browser crop
+    editor), transcribe the new clip, and store it + its new region. The transcript comes from the
+    actual edited audio."""
+    data = await file.read()
+    if not data:
+        return JSONResponse({"ok": False, "error": "Empty clip."}, status_code=400)
+    import tempfile as _tempfile
+    import time as _time
+    ref_text = ""
+    tmp = os.path.join(_tempfile.gettempdir(),
+                       f"moodclip_{character_id}_{_safe_name(mood)}_{int(_time.time()*1000)}.wav")
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+        try:
+            data_t, status_t = await tts_svc.transcribe({"audio": tmp})
+            if status_t == 200 and data_t.get("ok"):
+                ref_text = (data_t.get("text") or "").strip()
+        except Exception:
+            pass
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    m = await asyncio.get_event_loop().run_in_executor(
+        None, lambda: store.update_mood_clip(project_id, character_id, mood, data, start, end, ref_text))
+    if not m:
+        return JSONResponse({"ok": False, "error": "Character or mood not found."}, status_code=404)
+    return {"ok": True, "ref_text": ref_text,
+            "clip": f"/api/projects/{project_id}/characters/{character_id}/file/mood-{mood}"}
 
 
 @app.get("/api/media")

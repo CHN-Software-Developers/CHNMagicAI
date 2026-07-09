@@ -56,22 +56,26 @@ CINEMATIC_SEP_ID = "157"       # CinematicAudioSeparation; output 0 = music_remo
 def build_character_timeline(description, moods_spec, line, fps, frames_per_mood):
     """Build a timeline for a character's reference-audio video.
 
-    One text segment per mood, in which the same character speaks the same built-in `line` while
-    performing that mood. LTX generates the speech natively (no custom audio segments). Returns
-    (timeline_dict, moods_meta) where moods_meta = [{key,label,start,length}] — the frame ranges the
-    caller later crops the per-mood reference clips from.
+    One text segment per mood. Each mood speaks its OWN mood-relevant line (falling back to the shared
+    `line` if a mood doesn't define one) — giving the same character a *different* sentence per mood
+    rather than repeating one line, which LTX otherwise collapses into a single utterance. LTX
+    generates the speech natively (no custom audio segments). Returns (timeline_dict, moods_meta)
+    where moods_meta = [{key,label,tone,line,start,length}] — the frame ranges the caller later crops
+    the per-mood reference clips from.
     """
     frames_per_mood = int(frames_per_mood) or 72
     desc = (description or "").strip()
     global_prompt = (
         (desc + ". " if desc else "")
-        + f'A single person talking directly to camera, portrait framing, clear lip-synced speech, '
-        'plain studio background, steady shot, saying "{line}" repeatedly in different moods: Neutral, Happy, Sad, Angry, Excited.'
+        + "A single person talking directly to camera, portrait framing, clear lip-synced speech, "
+        "plain studio background, steady shot. The person delivers a different short line in each "
+        "moment, cycling through moods: neutral, happy, sad, angry, excited."
     )
     segments, moods_meta = [], []
     cursor = 0
     for i, mood in enumerate(moods_spec):
-        prompt = f'The character {mood.get("prompt", "")}, saying "{line}".'
+        mood_line = (mood.get("line") or line or "").strip()
+        prompt = f'The character {mood.get("prompt", "")}, saying: "{mood_line}".'
         segments.append({
             "id": f"mood{i}",
             "start": cursor,
@@ -84,6 +88,7 @@ def build_character_timeline(description, moods_spec, line, fps, frames_per_mood
             "key": mood.get("key"),
             "label": mood.get("label", mood.get("key", "")),
             "tone": mood.get("tone", ""),
+            "line": mood_line,
             "start": cursor,
             "length": frames_per_mood,
         })
@@ -245,6 +250,15 @@ def build_prompt(params, settings):
     character = params.get("character")
     if character and CINEMATIC_SEP_ID in prompt:
         char_id = character.get("character_id", "char")
+        # Save the WHOLE cleaned speech track too, so the manual crop editor can show the full
+        # waveform and let the user re-crop each mood's region against it.
+        prompt["c_full_save"] = {
+            "class_type": "SaveAudioAdvanced",
+            "_meta": {"title": "Full reference audio"},
+            "inputs": {"audio": [CINEMATIC_SEP_ID, 0],
+                       "filename_prefix": f"mood/{char_id}-full",
+                       "format": "flac"},
+        }
         for i, mood in enumerate(character.get("moods", [])):
             start = float(mood.get("start", 0)) / fps if fps else 0.0
             dur = float(mood.get("length", 0)) / fps if fps else 0.0

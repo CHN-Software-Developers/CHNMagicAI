@@ -2334,9 +2334,145 @@ body[data-screen="studio"] #screenStudio {
   display: grid;
 }
 
+.char-card-actions {
+  margin-top: 10px;
+}
+
 /* New-character modal + reference-source toggle */
 .modal-box-sm {
   max-width: 520px;
+}
+.modal-box-lg {
+  max-width: 880px;
+  width: 92vw;
+}
+
+/* Mood-clip crop editor */
+.crop-wave-wrap {
+  position: relative;
+  width: 100%;
+  height: 140px;
+  margin: 8px 0 6px;
+  background: #02040a;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  touch-action: none;
+}
+.crop-wave {
+  display: block;
+  width: 100%;
+  height: 140px;
+}
+.crop-regions {
+  position: absolute;
+  inset: 0;
+}
+.crop-region {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--rc) 18%, transparent);
+  border-left: 2px solid var(--rc);
+  border-right: 2px solid var(--rc);
+  box-sizing: border-box;
+}
+.crop-region.dirty {
+  background: color-mix(in srgb, var(--rc) 30%, transparent);
+}
+.crop-region-label {
+  position: absolute;
+  top: 3px;
+  left: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 2px #000;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.crop-h {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  cursor: ew-resize;
+  background: var(--rc);
+  opacity: 0.85;
+}
+.crop-h-l {
+  left: -2px;
+}
+.crop-h-r {
+  right: -2px;
+}
+.crop-region {
+  cursor: grab;
+}
+.crop-wave-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+.crop-wave-loading.hidden {
+  display: none;
+}
+.crop-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #fff;
+  pointer-events: none;
+}
+.crop-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0 4px;
+}
+.crop-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.crop-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+.crop-row-label {
+  font-weight: 600;
+  font-size: 13px;
+  min-width: 110px;
+}
+.crop-row-time {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  flex: 1;
+}
+.crop-dirty-tag {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent-bright);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.crop-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 8px;
 }
 .char-form {
   display: flex;

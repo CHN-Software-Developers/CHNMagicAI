@@ -617,6 +617,35 @@
       </div>
     </div>
 
+    <!-- Mood-clip crop editor: adjust each mood's region on the full reference audio -->
+    <div id="cropModal" class="modal">
+      <div class="modal-box modal-box-lg">
+        <div class="modal-head">
+          <h2>Adjust mood clips — <span id="cropCharName"></span></h2>
+          <button id="closeCrop" class="btn btn-ghost">✕</button>
+        </div>
+        <p class="hint">
+          Drag each mood's handles on the waveform to re-crop it from the full
+          reference audio. Saving re-transcribes the trimmed clip for accurate
+          voice cloning.
+        </p>
+        <div class="crop-wave-wrap" id="cropWaveWrap">
+          <canvas id="cropWave" class="crop-wave"></canvas>
+          <div id="cropRegions" class="crop-regions"></div>
+          <div id="cropPlayhead" class="crop-playhead hidden"></div>
+          <div id="cropWaveLoading" class="crop-wave-loading">Loading audio…</div>
+        </div>
+        <div id="cropList" class="crop-list"></div>
+        <div class="crop-actions">
+          <span id="cropStatus" class="tts-status"></span>
+          <button class="btn btn-primary" id="cropSave" disabled>
+            Save changes
+          </button>
+        </div>
+        <audio id="cropAudio" class="hidden"></audio>
+      </div>
+    </div>
+
     <!-- Add-audio modal: upload a file OR generate speech -->
     <div id="audioModal" class="modal">
       <div class="modal-box">

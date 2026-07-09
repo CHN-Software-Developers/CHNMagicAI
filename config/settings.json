@@ -75,31 +75,36 @@
         "key": "neutral",
         "label": "Neutral",
         "prompt": "speaking calmly and plainly, neutral relaxed expression",
-        "tone": "Speak in a calm, neutral tone."
+        "tone": "Speak in a calm, neutral tone.",
+        "line": "So this is how the whole thing actually works."
       },
       {
         "key": "happy",
         "label": "Happy / Laughing",
         "prompt": "laughing warmly and speaking cheerfully, bright joyful smile",
-        "tone": "Speak in a cheerful, excited, happy tone."
+        "tone": "Speak in a cheerful, excited, happy tone.",
+        "line": "Ha, this is honestly the best news all week!"
       },
       {
         "key": "sad",
         "label": "Sad / Crying",
         "prompt": "crying and speaking through tears, sorrowful downcast expression",
-        "tone": "Speak in a sad, sorrowful, crying voice."
+        "tone": "Speak in a sad, sorrowful, crying voice.",
+        "line": "I really don't know how I'll get through this."
       },
       {
         "key": "angry",
         "label": "Angry",
         "prompt": "speaking angrily with a raised sharp voice, furious tense expression",
-        "tone": "Speak in an angry, intense tone."
+        "tone": "Speak in an angry, intense tone.",
+        "line": "That is absolutely not what we agreed on!"
       },
       {
         "key": "excited",
         "label": "Excited",
         "prompt": "speaking with high energy and excitement, wide-eyed enthusiastic expression",
-        "tone": "Speak with high, excited energy."
+        "tone": "Speak with high, excited energy.",
+        "line": "You have to see this, it's going to be amazing!"
       }
     ]
   },

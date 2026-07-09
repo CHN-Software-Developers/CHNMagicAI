@@ -365,6 +365,11 @@ class ProjectStore:
             return None
         cid = _new_id()
         os.makedirs(os.path.join(entry["path"], "characters", cid, "moods"), exist_ok=True)
+        fps = float((meta or {}).get("fps") or 24) or 24
+
+        def sec(frames):
+            return round(float(frames) / fps, 3)
+
         char = {
             "id": cid,
             "name": (name or "").strip() or "Character",
@@ -373,9 +378,14 @@ class ProjectStore:
             "status": "generating",
             "avatar": None,
             "video": None,
+            "fullAudio": None,
             "moods": [{"key": m.get("key"), "label": m.get("label", m.get("key", "")),
-                       "tone": m.get("tone", ""), "clip": None, "refText": "",
-                       "start": m.get("start", 0), "length": m.get("length", 0)}
+                       "tone": m.get("tone", ""), "line": m.get("line", ""),
+                       "clip": None, "refText": "",
+                       "start": m.get("start", 0), "length": m.get("length", 0),
+                       # region on the full-audio timeline (seconds); the manual editor adjusts these
+                       "startSec": sec(m.get("start", 0)),
+                       "endSec": sec(m.get("start", 0) + m.get("length", 0))}
                       for m in moods_spec],
             "meta": meta or {},
         }
@@ -383,10 +393,14 @@ class ProjectStore:
         self._save_manifest(entry, manifest)
         return char
 
-    def finalize_character(self, project_id, character_id, video_src, mood_clips):
-        """Copy the rendered video and per-mood clips into the character folder and mark it ready.
+    def finalize_character(self, project_id, character_id, video_src, mood_clips, full_src=None):
+        """Copy the rendered video, the full reference audio, and per-mood clips into the character
+        folder and mark it ready.
 
-        `mood_clips` = [{key, src, refText}]. Missing sources are tolerated (mood stays clip=None)."""
+        `mood_clips` = [{key, src, refText}]. Missing sources are tolerated (mood stays clip=None).
+        `refText` is the transcript of the actual generated clip (empty if Whisper wasn't available)
+        — we do NOT fall back to the prompt line, so the reference transcript reflects what the clip
+        really says."""
         entry = self._entry(project_id)
         manifest = self._load_manifest(entry)
         if not manifest:
@@ -401,6 +415,10 @@ class ProjectStore:
             ext = os.path.splitext(video_src)[1].lower() or ".mp4"
             shutil.copy2(video_src, os.path.join(cdir, f"video{ext}"))
             char["video"] = f"characters/{character_id}/video{ext}"
+        if full_src and os.path.isfile(full_src):
+            ext = os.path.splitext(full_src)[1].lower() or ".flac"
+            shutil.copy2(full_src, os.path.join(cdir, f"full{ext}"))
+            char["fullAudio"] = f"characters/{character_id}/full{ext}"
         by_key = {c.get("key"): c for c in (mood_clips or [])}
         for mood in char["moods"]:
             clip = by_key.get(mood["key"])
@@ -412,13 +430,61 @@ class ProjectStore:
                 dst = os.path.join(cdir, "moods", f"{mood['key']}{ext}")
                 shutil.copy2(src, dst)
                 mood["clip"] = f"characters/{character_id}/moods/{mood['key']}{ext}"
-            # The transcript anchors zero-shot cloning; fall back to the known line we asked the
-            # character to speak so every mood has a usable ref_text even if Whisper transcription
-            # came back empty (otherwise only some moods would auto-fill).
-            mood["refText"] = clip.get("refText") or char.get("meta", {}).get("line", "")
+            mood["refText"] = clip.get("refText", "")
         char["status"] = "ready"
         self._save_manifest(entry, manifest)
         return char
+
+    def update_mood_clip(self, project_id, character_id, mood_key, clip_bytes, start_sec,
+                         end_sec, ref_text):
+        """Replace a mood's reference clip with a user-edited crop (raw WAV bytes from the browser
+        editor) and update its region + transcript. Returns the updated mood dict."""
+        entry = self._entry(project_id)
+        manifest = self._load_manifest(entry)
+        if not manifest:
+            return None
+        char = self._get_char(manifest, character_id)
+        if not char:
+            return None
+        mood = next((m for m in char.get("moods", []) if m.get("key") == mood_key), None)
+        if not mood:
+            return None
+        base = entry["path"]
+        mdir = os.path.join(base, "characters", character_id, "moods")
+        os.makedirs(mdir, exist_ok=True)
+        # Remove any prior clip for this mood (extension may differ, e.g. .flac -> .wav).
+        old = mood.get("clip")
+        if old:
+            oldp = os.path.join(base, old)
+            if os.path.isfile(oldp) and _within(base, oldp):
+                try:
+                    os.remove(oldp)
+                except OSError:
+                    pass
+        dst = os.path.join(mdir, f"{mood_key}.wav")
+        with open(dst, "wb") as f:
+            f.write(clip_bytes)
+        mood["clip"] = f"characters/{character_id}/moods/{mood_key}.wav"
+        mood["startSec"] = round(float(start_sec), 3)
+        mood["endSec"] = round(float(end_sec), 3)
+        mood["refText"] = ref_text or ""
+        self._save_manifest(entry, manifest)
+        return mood
+
+    def set_mood_reftext(self, project_id, character_id, mood_key, ref_text):
+        entry = self._entry(project_id)
+        manifest = self._load_manifest(entry)
+        if not manifest:
+            return None
+        char = self._get_char(manifest, character_id)
+        if not char:
+            return None
+        mood = next((m for m in char.get("moods", []) if m.get("key") == mood_key), None)
+        if not mood:
+            return None
+        mood["refText"] = ref_text or ""
+        self._save_manifest(entry, manifest)
+        return mood
 
     def set_character_error(self, project_id, character_id):
         entry = self._entry(project_id)
@@ -459,7 +525,9 @@ class ProjectStore:
         if not char:
             return None
         rel = None
-        if kind in ("video", "avatar"):
+        if kind == "full":
+            rel = char.get("fullAudio")
+        elif kind in ("video", "avatar"):
             rel = char.get(kind)
         elif kind.startswith("mood-"):
             key = kind[len("mood-"):]

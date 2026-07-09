@@ -406,6 +406,9 @@ function buildCharacterCard(c) {
     (c.status === "ready"
       ? `<p class="char-meta">${ready} mood voice${ready === 1 ? "" : "s"} ready — tap to preview</p>`
       : "") +
+    (c.status === "ready" && c.fullAudio
+      ? `<div class="char-card-actions"><button type="button" class="btn btn-sm" data-edit="1">✎ Adjust clips</button></div>`
+      : "") +
     `</div>` +
     `<audio class="mood-audio hidden"></audio>` +
     `<button class="pc-del" data-del="1" title="Delete character">${TRASH_SVG}</button>`;
@@ -414,6 +417,11 @@ function buildCharacterCard(c) {
     if (e.target.closest("[data-del]")) {
       e.stopPropagation();
       deleteCharacter(c.id);
+      return;
+    }
+    if (e.target.closest("[data-edit]")) {
+      e.stopPropagation();
+      openCropEditor(c.id);
       return;
     }
     const play = e.target.closest(".mood-chip.play");
@@ -483,6 +491,291 @@ async function deleteCharacter(id) {
   });
   await refreshLibrary();
   setLibTab("characters");
+}
+
+/* ------------------- character mood-clip crop editor (full-audio regions) ------------------- */
+const crop = {
+  charId: null,
+  buffer: null, // decoded AudioBuffer of the full reference audio
+  duration: 0,
+  regions: [], // [{key,label,start,end,dirty,color}]
+  drag: null, // {idx, edge, x0, s0, e0}
+  playTimer: null,
+};
+const MOOD_COLORS = ["#38bdf8", "#4ade80", "#a78bfa", "#f472b6", "#fbbf24"];
+
+async function openCropEditor(charId) {
+  const c = (state.characters || []).find((x) => x.id === charId);
+  if (!c || !c.fullAudio) return;
+  crop.charId = charId;
+  crop.buffer = null;
+  crop.duration = 0;
+  crop.regions = (c.moods || []).map((m, i) => ({
+    key: m.key,
+    label: m.label || m.key,
+    start: m.startSec || 0,
+    end: m.endSec || 0,
+    dirty: false,
+    color: MOOD_COLORS[i % MOOD_COLORS.length],
+  }));
+  $("cropCharName").textContent = c.name || "Character";
+  $("cropStatus").textContent = "";
+  $("cropSave").disabled = true;
+  $("cropWaveLoading").classList.remove("hidden");
+  $("cropRegions").innerHTML = "";
+  $("cropList").innerHTML = "";
+  openModal("cropModal");
+  try {
+    const resp = await fetch(c.fullAudio);
+    const arr = await resp.arrayBuffer();
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    crop.buffer = await ctx.decodeAudioData(arr);
+    crop.duration = crop.buffer.duration;
+    crop.regions.forEach((r) => {
+      r.end = Math.min(r.end || crop.duration, crop.duration);
+      r.start = Math.max(0, Math.min(r.start, r.end - 0.1));
+    });
+    $("cropAudio").src = c.fullAudio;
+    $("cropWaveLoading").classList.add("hidden");
+    drawCropWave();
+    renderCropRegions();
+    renderCropList();
+  } catch {
+    $("cropWaveLoading").textContent = "Couldn't load the audio.";
+  }
+}
+
+function cropWidth() {
+  return $("cropWaveWrap").clientWidth || 800;
+}
+function secToX(sec) {
+  return crop.duration ? (sec / crop.duration) * cropWidth() : 0;
+}
+function xToSec(x) {
+  return crop.duration ? (x / cropWidth()) * crop.duration : 0;
+}
+
+function drawCropWave() {
+  const canvas = $("cropWave");
+  const W = cropWidth();
+  const H = 140;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = W + "px";
+  canvas.style.height = H + "px";
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  const data = crop.buffer.getChannelData(0);
+  const step = Math.max(1, Math.floor(data.length / W));
+  const mid = H / 2;
+  ctx.fillStyle = "rgba(91,155,255,0.5)";
+  for (let x = 0; x < W; x++) {
+    let min = 1,
+      max = -1;
+    for (let j = 0; j < step; j++) {
+      const v = data[x * step + j] || 0;
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    const y1 = mid + min * mid * 0.9;
+    const y2 = mid + max * mid * 0.9;
+    ctx.fillRect(x, y1, 1, Math.max(1, y2 - y1));
+  }
+}
+
+function renderCropRegions() {
+  const host = $("cropRegions");
+  host.innerHTML = "";
+  crop.regions.forEach((r, i) => {
+    const el = document.createElement("div");
+    el.className = "crop-region" + (r.dirty ? " dirty" : "");
+    el.style.left = secToX(r.start) + "px";
+    el.style.width = Math.max(2, secToX(r.end) - secToX(r.start)) + "px";
+    el.style.setProperty("--rc", r.color);
+    el.dataset.idx = i;
+    el.innerHTML =
+      `<span class="crop-region-label">${escapeHtml(r.label)}</span>` +
+      `<span class="crop-h crop-h-l" data-edge="start"></span>` +
+      `<span class="crop-h crop-h-r" data-edge="end"></span>`;
+    host.appendChild(el);
+  });
+}
+
+function positionRegion(idx) {
+  const el = $("cropRegions").children[idx];
+  const r = crop.regions[idx];
+  if (!el) return;
+  el.style.left = secToX(r.start) + "px";
+  el.style.width = Math.max(2, secToX(r.end) - secToX(r.start)) + "px";
+  el.classList.add("dirty");
+}
+
+function renderCropList() {
+  const host = $("cropList");
+  host.innerHTML = "";
+  crop.regions.forEach((r, i) => {
+    const row = document.createElement("div");
+    row.className = "crop-row";
+    row.innerHTML =
+      `<span class="crop-swatch" style="background:${r.color}"></span>` +
+      `<span class="crop-row-label">${escapeHtml(r.label)}</span>` +
+      `<span class="crop-row-time">${r.start.toFixed(2)}s – ${r.end.toFixed(
+        2,
+      )}s · ${(r.end - r.start).toFixed(2)}s</span>` +
+      `<button type="button" class="btn btn-sm crop-play" data-idx="${i}">▶ Preview</button>` +
+      (r.dirty ? `<span class="crop-dirty-tag">edited</span>` : "");
+    host.appendChild(row);
+  });
+}
+
+function initCropDrag() {
+  const host = $("cropRegions");
+  host.addEventListener("pointerdown", (e) => {
+    const region = e.target.closest(".crop-region");
+    if (!region) return;
+    const idx = +region.dataset.idx;
+    const edge = e.target.dataset.edge || "move";
+    const r = crop.regions[idx];
+    crop.drag = { idx, edge, x0: e.clientX, s0: r.start, e0: r.end };
+    host.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  host.addEventListener("pointermove", (e) => {
+    if (!crop.drag) return;
+    const { idx, edge, x0, s0, e0 } = crop.drag;
+    const r = crop.regions[idx];
+    const dsec = xToSec(e.clientX - x0);
+    const MIN = 0.15;
+    if (edge === "start") {
+      r.start = Math.max(0, Math.min(s0 + dsec, r.end - MIN));
+    } else if (edge === "end") {
+      r.end = Math.min(crop.duration, Math.max(e0 + dsec, r.start + MIN));
+    } else {
+      const len = e0 - s0;
+      let ns = Math.max(0, Math.min(s0 + dsec, crop.duration - len));
+      r.start = ns;
+      r.end = ns + len;
+    }
+    r.dirty = true;
+    positionRegion(idx);
+    renderCropList();
+    $("cropSave").disabled = !crop.regions.some((x) => x.dirty);
+  });
+  const endDrag = () => {
+    if (crop.drag) {
+      renderCropRegions();
+      crop.drag = null;
+    }
+  };
+  host.addEventListener("pointerup", endDrag);
+  host.addEventListener("pointercancel", endDrag);
+}
+
+function playCropRegion(idx) {
+  const r = crop.regions[idx];
+  const a = $("cropAudio");
+  stopCropPlay();
+  try {
+    a.currentTime = r.start;
+    a.play();
+    crop.playTimer = setInterval(() => {
+      if (a.currentTime >= r.end) stopCropPlay();
+    }, 30);
+  } catch {
+    /* ignore */
+  }
+}
+function stopCropPlay() {
+  const a = $("cropAudio");
+  a.pause();
+  if (crop.playTimer) {
+    clearInterval(crop.playTimer);
+    crop.playTimer = null;
+  }
+}
+
+// Slice the decoded full audio to [start,end] and encode a 16-bit PCM mono WAV blob (no deps).
+function encodeRegionWav(start, end) {
+  const buf = crop.buffer;
+  const sr = buf.sampleRate;
+  const s0 = Math.max(0, Math.floor(start * sr));
+  const s1 = Math.min(buf.length, Math.floor(end * sr));
+  const n = Math.max(1, s1 - s0);
+  const ch = buf.numberOfChannels;
+  const out = new Float32Array(n);
+  for (let c = 0; c < ch; c++) {
+    const d = buf.getChannelData(c);
+    for (let i = 0; i < n; i++) out[i] += (d[s0 + i] || 0) / ch;
+  }
+  const dataSize = n * 2;
+  const ab = new ArrayBuffer(44 + dataSize);
+  const dv = new DataView(ab);
+  const wr = (off, str) => {
+    for (let i = 0; i < str.length; i++) dv.setUint8(off + i, str.charCodeAt(i));
+  };
+  wr(0, "RIFF");
+  dv.setUint32(4, 36 + dataSize, true);
+  wr(8, "WAVE");
+  wr(12, "fmt ");
+  dv.setUint32(16, 16, true);
+  dv.setUint16(20, 1, true);
+  dv.setUint16(22, 1, true);
+  dv.setUint32(24, sr, true);
+  dv.setUint32(28, sr * 2, true);
+  dv.setUint16(32, 2, true);
+  dv.setUint16(34, 16, true);
+  wr(36, "data");
+  dv.setUint32(40, dataSize, true);
+  let off = 44;
+  for (let i = 0; i < n; i++) {
+    const v = Math.max(-1, Math.min(1, out[i]));
+    dv.setInt16(off, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+    off += 2;
+  }
+  return new Blob([ab], { type: "audio/wav" });
+}
+
+async function saveCropChanges() {
+  const dirty = crop.regions.filter((r) => r.dirty);
+  if (!dirty.length || !crop.buffer) return;
+  stopCropPlay();
+  $("cropSave").disabled = true;
+  $("cropStatus").textContent = `Saving ${dirty.length} clip${
+    dirty.length === 1 ? "" : "s"
+  } (re-transcribing)…`;
+  let failed = 0;
+  for (const r of dirty) {
+    try {
+      const blob = encodeRegionWav(r.start, r.end);
+      const fd = new FormData();
+      fd.append("file", blob, `${r.key}.wav`);
+      fd.append("start", String(r.start));
+      fd.append("end", String(r.end));
+      const resp = await fetch(
+        `/api/projects/${state.currentProjectId}/characters/${crop.charId}/moods/${r.key}/clip`,
+        { method: "POST", body: fd },
+      );
+      const data = await resp.json();
+      if (data && data.ok) r.dirty = false;
+      else failed++;
+    } catch {
+      failed++;
+    }
+  }
+  $("cropStatus").textContent = failed
+    ? `Saved with ${failed} error${failed === 1 ? "" : "s"}.`
+    : "Saved.";
+  renderCropList();
+  $("cropSave").disabled = !crop.regions.some((r) => r.dirty);
+  await refreshLibrary();
+  setLibTab("characters");
+}
+
+function closeCropEditor() {
+  stopCropPlay();
+  closeModal("cropModal");
 }
 
 function buildMediaCard(m) {
@@ -2359,6 +2652,14 @@ function wireEvents() {
   $("newCharacterEmpty").addEventListener("click", openCharacterModal);
   $("closeCharacter").addEventListener("click", () => closeModal("characterModal"));
   $("charGenerate").addEventListener("click", createCharacter);
+  // Mood-clip crop editor
+  $("closeCrop").addEventListener("click", closeCropEditor);
+  $("cropSave").addEventListener("click", saveCropChanges);
+  $("cropList").addEventListener("click", (e) => {
+    const b = e.target.closest(".crop-play");
+    if (b) playCropRegion(+b.dataset.idx);
+  });
+  initCropDrag();
 }
 
 async function renameCurrentProject() {
