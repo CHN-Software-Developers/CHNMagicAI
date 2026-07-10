@@ -729,7 +729,7 @@ async def api_characters_list(project_id: str):
 @app.post("/api/projects/{project_id}/characters")
 async def api_character_create(project_id: str, req: Request):
     """Register a character and kick off its mood reference-video generation (one segment per built-in
-    mood; low-res + background-music removal forced on; per-mood audio cropped in the graph)."""
+    mood; low-res throwaway video; per-mood audio cropped from the raw generated track in the graph)."""
     body = await req.json()
     if not store.get_project(project_id):
         return JSONResponse({"ok": False, "error": "Project not found."}, status_code=404)
@@ -758,12 +758,17 @@ async def api_character_create(project_id: str, req: Request):
         "aspect": ccfg.get("aspect", "portrait"),
         "frame_rate": fps,
         "use_custom_audio": False,
-        "enable_bg_music_removal": True,   # clean, music-free reference clips
+        # On: mood reference clips must be clean speech with no soundtrack under them. The separation
+        # chain is NOT what made the clips sound robotic (normal generations run it and sound fine) —
+        # that was `stage2_steps` being cut to 1; see the steps comment below.
+        "enable_bg_music_removal": bool(ccfg.get("enable_bg_music_removal", True)),
         "character": marker,
     }
-    # The mood video is thrown away — only its audio matters. Stage 2 is the spatial upscale/refine
-    # pass (barely touches the already-generated audio), so cut it to the minimum; trim stage 1 (which
-    # generates the speech) moderately. Both tunable via config.characters.
+    # The mood video is thrown away, but its AUDIO is the whole point, so the sampler steps can't be
+    # cut to the bone: stage 1 generates the speech and stage 2 re-denoises the audio latent from
+    # sigma 0.42 (node 18 feeds the stage-1 audio latent into the stage-2 sampler). `stage2_steps: 1`
+    # is a single crude Euler jump and leaves the speech under-denoised — it sounds robotic/electronic.
+    # Lower these only if you accept degraded reference audio; low `resolution` is the cheap knob.
     if ccfg.get("stage1_steps"):
         params["stage1_steps"] = int(ccfg["stage1_steps"])
     if ccfg.get("stage2_steps"):

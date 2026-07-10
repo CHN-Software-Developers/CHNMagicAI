@@ -1955,10 +1955,13 @@ body[data-screen="studio"] .crumb {
   color: var(--accent-bright);
 }
 
-/* Studio-only chrome (stepper + model actions) */
-body:not([data-screen="studio"]) .stepper,
-body:not([data-screen="studio"]) .top-actions {
+/* Studio-only chrome. The model badge + Models button stay in the topbar on every screen —
+   model readiness is global state, not a studio detail. */
+body:not([data-screen="studio"]) .stepper {
   display: none;
+}
+body:not([data-screen="studio"]) .top-actions {
+  margin-left: auto;
 }
 
 /* In the studio the crumb + actions flank the bar; keep the 3-step progress truly centered in

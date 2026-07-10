@@ -68,8 +68,9 @@
     "mood_frames": 72,
     "resolution": "480p",
     "aspect": "portrait",
-    "stage1_steps": 6,
-    "stage2_steps": 1,
+    "stage1_steps": 20,
+    "stage2_steps": 4,
+    "enable_bg_music_removal": true,
     "moods": [
       {
         "key": "neutral",
@@ -88,7 +89,7 @@
       {
         "key": "sad",
         "label": "Sad / Crying",
-        "prompt": "crying and speaking through tears, sorrowful downcast expression",
+        "prompt": "crying and speaking through tears, sorrowful downcast expression. Crying and sobbing heavily while speaking",
         "tone": "Speak in a sad, sorrowful, crying voice.",
         "line": "I really don't know how I'll get through this."
       },

@@ -52,6 +52,11 @@ SAVEAUDIO_ID = "144"           # SaveAudioAdvanced: the separate audio-only file
 RAW_AUDIO_ID = "24"            # LTXVAudioVAEDecode: raw generated audio (music present)
 CINEMATIC_SEP_ID = "157"       # CinematicAudioSeparation; output 0 = music_removed (speech+effects)
 
+# Audio quality note (matters for character reference clips): the audio latent produced by stage 1
+# (node 34 out 1) is re-noised to sigma 0.42 and re-denoised by the stage-2 sampler (node 19,
+# `stage2_steps` via node 21) before it reaches the decoder (node 24). Dropping `stage2_steps` to 1
+# makes that a single crude Euler jump and audibly wrecks the speech — stage 2 is NOT audio-free.
+
 
 def build_character_timeline(description, moods_spec, line, fps, frames_per_mood):
     """Build a timeline for a character's reference-audio video.
@@ -243,19 +248,22 @@ def build_prompt(params, settings):
 
     # --- character mood-clip extraction ---------------------------------------------
     # For a character reference-video generation, crop the generated audio into one clip per mood.
-    # `enable_bg_music_removal` is forced on by the caller so the CinematicAudioSeparation chain
-    # (156/157/158) stays in the graph and node 157 out 0 is the clean, music-free speech track we
-    # crop from (same track the character video's audio is muxed from). Each crop is saved with a
-    # `mood/<charId>-<moodKey>` prefix so `_on_complete` can match the outputs back to the mood.
+    # Crops follow whatever track this generation's audio actually uses: the music-removed speech
+    # (node 157 out 0) when bg-music removal is on — which is the default for characters, since a
+    # voice reference must not have a soundtrack under it — else the raw decoded audio (node 24).
+    # Either way it's the same track the video is muxed from, so the clips sound exactly like the
+    # generation. Each crop is saved with a `mood/<charId>-<moodKey>` prefix so `_on_complete` can
+    # match the outputs back to the mood.
     character = params.get("character")
-    if character and CINEMATIC_SEP_ID in prompt:
+    if character:
+        audio_src = [CINEMATIC_SEP_ID, 0] if CINEMATIC_SEP_ID in prompt else [RAW_AUDIO_ID, 0]
         char_id = character.get("character_id", "char")
         # Save the WHOLE cleaned speech track too, so the manual crop editor can show the full
         # waveform and let the user re-crop each mood's region against it.
         prompt["c_full_save"] = {
             "class_type": "SaveAudioAdvanced",
             "_meta": {"title": "Full reference audio"},
-            "inputs": {"audio": [CINEMATIC_SEP_ID, 0],
+            "inputs": {"audio": list(audio_src),
                        "filename_prefix": f"mood/{char_id}-full",
                        "format": "flac"},
         }
@@ -267,7 +275,7 @@ def build_prompt(params, settings):
             prompt[trim_id] = {
                 "class_type": "TrimAudioDuration",
                 "_meta": {"title": f"Crop {mood.get('key')}"},
-                "inputs": {"audio": [CINEMATIC_SEP_ID, 0], "start_index": round(start, 3),
+                "inputs": {"audio": list(audio_src), "start_index": round(start, 3),
                            "duration": round(dur, 3)},
             }
             # FLAC = lossless (best for a voice print) and needs no quality sub-option; SaveAudioAdvanced
