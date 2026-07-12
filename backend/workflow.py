@@ -67,20 +67,35 @@ def build_character_timeline(description, moods_spec, line, fps, frames_per_mood
     generates the speech natively (no custom audio segments). Returns (timeline_dict, moods_meta)
     where moods_meta = [{key,label,tone,line,start,length}] — the frame ranges the caller later crops
     the per-mood reference clips from.
+
+    A mood's `prompt` may embed the spoken line inline via a `{line}` placeholder (the format the user
+    verified produces clean, in-character speech — the line reads mid-sentence, e.g. `...saying,
+    "{line}". Tears stream...`). Without a placeholder we fall back to the terser
+    `The character <prompt>, saying: "<line>".` template. A mood may also carry a `transition` string
+    (e.g. "The mood suddenly changes to a happy face.") that is prepended to every segment after the
+    first, cueing LTX that the emotion shifts — without it LTX tends to carry the opening mood through.
     """
     frames_per_mood = int(frames_per_mood) or 72
     desc = (description or "").strip()
+    if desc and not desc.endswith((".", "!", "?")):
+        desc += "."
     global_prompt = (
-        (desc + ". " if desc else "")
+        (desc + " " if desc else "")
         + "A single person talking directly to camera, portrait framing, clear lip-synced speech, "
-        "plain studio background, steady shot. The person delivers a different short line in each "
-        "moment, cycling through moods: neutral, happy, sad, angry, excited."
+        "plain studio background, steady shot."
     )
     segments, moods_meta = [], []
     cursor = 0
     for i, mood in enumerate(moods_spec):
         mood_line = (mood.get("line") or line or "").strip()
-        prompt = f'The character {mood.get("prompt", "")}, saying: "{mood_line}".'
+        tmpl = mood.get("prompt", "") or ""
+        if "{line}" in tmpl:
+            prompt = tmpl.replace("{line}", mood_line)
+        else:
+            prompt = f'The character {tmpl}, saying: "{mood_line}".'
+        transition = (mood.get("transition") or "").strip()
+        if i > 0 and transition:
+            prompt = f"{transition} {prompt}"
         segments.append({
             "id": f"mood{i}",
             "start": cursor,
