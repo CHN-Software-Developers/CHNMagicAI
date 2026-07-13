@@ -220,7 +220,8 @@
                   <div class="timeline-actions">
                     <button class="btn btn-sm" id="addText">+ Text</button>
                     <button class="btn btn-sm" id="addImage">+ Image</button>
-                    <button class="btn btn-sm" id="addVideo">+ Video</button>
+                    <button class="btn btn-sm" id="addVideo" title="Add a video to the main track (for extending a video)">+ Video</button>
+                    <button class="btn btn-sm" id="addMotion" title="Add a video to the IC-LoRA track (camera / video-to-video guidance)">+ IC-LoRA</button>
                     <button class="btn btn-sm" id="addAudio">+ Audio</button>
                     <button class="btn btn-sm btn-ghost" id="openAdvanced">
                       ⚙ Advanced
@@ -238,7 +239,7 @@
                   </div>
                   <div class="tl-track motion" data-track="motion">
                     <span class="tl-track-tag"
-                      ><b>Motion</b><i>Camera guidance</i></span
+                      ><b>IC-LoRA Video</b><i>Camera / video guidance</i></span
                     >
                     <div class="tl-lane" id="laneMotion"></div>
                   </div>
@@ -473,6 +474,7 @@
           <h2>Advanced settings</h2>
           <button id="closeAdvanced" class="btn btn-ghost">✕</button>
         </div>
+        <div class="modal-scroll">
         <div class="settings-grid">
           <label class="field"
             ><span>Stage&nbsp;1 steps</span
@@ -532,6 +534,7 @@
             gaps</label
           >
         </div>
+        </div>
       </div>
     </div>
 
@@ -542,6 +545,7 @@
           <h2>Models</h2>
           <button id="closeModels" class="btn btn-ghost">✕</button>
         </div>
+        <div class="modal-scroll">
         <p class="hint">
           Download required models, or point at files you already have (e.g. on
           an external drive). Edit <code>config/models_manifest.json</code> to
@@ -574,6 +578,7 @@
           <div class="ve-status" id="ttsEngineStatus">Checking…</div>
           <div id="ttsSetupLog" class="ve-log hidden"></div>
         </div>
+        </div>
       </div>
     </div>
 
@@ -584,6 +589,7 @@
           <h2>New character</h2>
           <button id="closeCharacter" class="btn btn-ghost">✕</button>
         </div>
+        <div class="modal-scroll">
         <div class="char-form">
           <label class="tts-field">
             <span class="tts-field-label">Name</span>
@@ -607,12 +613,13 @@
             in each mood (Neutral, Happy, Sad, Angry, Excited), then extracts a
             reference voice per mood. This takes a little while.
           </p>
-          <div class="char-form-actions">
-            <span id="charStatus" class="tts-status"></span>
-            <button class="btn btn-primary" id="charGenerate">
-              Generate character
-            </button>
-          </div>
+        </div>
+        </div>
+        <div class="modal-foot">
+          <span id="charStatus" class="tts-status"></span>
+          <button class="btn btn-primary" id="charGenerate">
+            Generate character
+          </button>
         </div>
       </div>
     </div>
@@ -624,6 +631,7 @@
           <h2>Adjust mood clips — <span id="cropCharName"></span></h2>
           <button id="closeCrop" class="btn btn-ghost">✕</button>
         </div>
+        <div class="modal-scroll">
         <p class="hint">
           Drag each mood's handles on the waveform to re-crop it from the full
           reference audio. Saving re-transcribes the trimmed clip for accurate
@@ -636,13 +644,14 @@
           <div id="cropWaveLoading" class="crop-wave-loading">Loading audio…</div>
         </div>
         <div id="cropList" class="crop-list"></div>
-        <div class="crop-actions">
+        <audio id="cropAudio" class="hidden"></audio>
+        </div>
+        <div class="modal-foot">
           <span id="cropStatus" class="tts-status"></span>
           <button class="btn btn-primary" id="cropSave" disabled>
             Save changes
           </button>
         </div>
-        <audio id="cropAudio" class="hidden"></audio>
       </div>
     </div>
 
@@ -658,6 +667,7 @@
           <button class="tab" data-tab="speak">🗣 Clone a voice</button>
         </div>
 
+        <div class="modal-scroll">
         <!-- Upload tab -->
         <div class="tab-pane" data-pane="upload">
           <p class="hint">Add a music or voice file from your computer.</p>
@@ -824,6 +834,7 @@
               </div>
             </div>
           </div>
+        </div>
         </div>
       </div>
     </div>

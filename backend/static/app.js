@@ -97,6 +97,15 @@ function mkSeg(type, prompt = "", extra = {}) {
     length: 48,
     imageFile: extra.imageFile || null,
     imageB64: extra.imageB64 || null,
+    // Video segments (main track) carry the engine input filename in imageFile — the
+    // same key LTX Director reads for both image and video guides — plus a preview URL,
+    // a poster thumbnail, and a trim offset. `lockLen` keeps fitToTotal from rescaling
+    // the segment away from the real clip length.
+    videoUrl: extra.videoUrl || null,
+    poster: extra.poster || null,
+    trimStart: extra.trimStart || 0,
+    lockLen: !!extra.lockLen,
+    name: extra.name || "",
     isEndFrame: false,
   };
 }
@@ -830,6 +839,7 @@ function buildMediaCard(m) {
     (m.video ? `<a class="mc-act" download href="${m.video}" title="Download video">⬇ Video</a>` : "") +
     (m.audio ? `<a class="mc-act" download href="${m.audio}" title="Download audio">⬇ Audio</a>` : "") +
     (m.lastFrame ? `<a class="mc-act" download href="${m.lastFrame}" title="Download last frame">⬇ Frame</a>` : "") +
+    (m.video ? `<button class="mc-act" data-act="extend" title="Extend this video — opens the studio with it on the timeline at double length">⧉ Extend</button>` : "") +
     (m.lastFrame ? `<button class="mc-act" data-act="reuse" title="Use last frame in a new generation">↻ Reuse frame</button>` : "") +
     `<button class="mc-act mc-del" data-act="delete" title="Delete">${TRASH_SVG}</button>` +
     `</div></div>` +
@@ -855,6 +865,9 @@ function wireMediaCard(card, m) {
   const reuseBtn = card.querySelector('[data-act="reuse"]');
   if (reuseBtn && m.lastFrame)
     reuseBtn.addEventListener("click", () => reuseLastFrame(m.lastFrame));
+  const extendBtn = card.querySelector('[data-act="extend"]');
+  if (extendBtn && m.video)
+    extendBtn.addEventListener("click", () => extendVideo(m));
 }
 
 async function deleteMedia(mediaId) {
@@ -905,11 +918,46 @@ function totalFrames() {
   return Math.max(mainSum, frames(), 1);
 }
 
-/* Scale main segment lengths proportionally so they exactly fill the total frame count. */
+/* Scale main segment lengths proportionally so they exactly fill the total frame count.
+   Locked segments (video shots anchored to a real clip length) keep their length; the
+   remaining frames are shared among the flexible (text/image) shots. When there is no
+   flexible shot to absorb the remainder, everything is scaled proportionally (fallback). */
 function fitToTotal() {
   const n = state.segments.length;
   if (n === 0) return;
   const total = frames();
+
+  const locked = state.segments.filter((s) => s.lockLen);
+  const flex = state.segments.filter((s) => !s.lockLen);
+  const lockedSum = locked.reduce((a, s) => a + (s.length || 0), 0);
+  const remainder = total - lockedSum;
+
+  // Only honor the locks when the flexible shots can still fill the remaining space.
+  if (locked.length && flex.length && remainder >= MIN_LEN * flex.length) {
+    let sum = flex.reduce((a, s) => a + (s.length || 0), 0);
+    if (sum <= 0) {
+      const per = Math.floor(remainder / flex.length);
+      flex.forEach((s) => (s.length = per));
+      sum = per * flex.length;
+    }
+    const scale = remainder / sum;
+    flex.forEach(
+      (s) => (s.length = Math.max(MIN_LEN, Math.round(s.length * scale))),
+    );
+    const ns = flex.reduce((a, s) => a + s.length, 0);
+    const last = flex[flex.length - 1];
+    last.length = Math.max(MIN_LEN, last.length + (remainder - ns));
+    updateTimelineInfo();
+    return;
+  }
+  // A lone locked video (no flexible shot): keep its real length, leaving a generated
+  // tail after it if the timeline is longer — that tail is the extension to be rendered.
+  if (locked.length && !flex.length && lockedSum <= total) {
+    updateTimelineInfo();
+    return;
+  }
+
+  // Fallback: proportional scale of everything to fill the timeline.
   let sum = state.segments.reduce((a, s) => a + (s.length || 0), 0);
   if (sum <= 0) {
     const per = Math.floor(total / n);
@@ -936,12 +984,17 @@ function updateTimelineInfo() {
 function addSegment(type, prompt = "", extra = {}) {
   const total = frames();
   const s = mkSeg(type, prompt, extra);
-  s.length = Math.max(MIN_LEN, Math.round(total / (state.segments.length + 1)));
+  // A video shot anchors to its real clip length (extra.length); everything else takes an
+  // even share of the timeline and is then rescaled to fit by fitToTotal.
+  s.length = extra.length
+    ? Math.max(MIN_LEN, Math.round(extra.length))
+    : Math.max(MIN_LEN, Math.round(total / (state.segments.length + 1)));
   state.segments.push(s);
   fitToTotal();
   renderTimeline();
   selectSegment(s.id);
   refreshPreview();
+  return s;
 }
 
 function removeSegment(id) {
@@ -997,16 +1050,19 @@ function renderMain() {
     block.className =
       "tl-block" +
       (s.type === "image" ? " image" : "") +
+      (s.type === "video" ? " video" : "") +
       (s.id === state.selectedId ? " selected" : "");
     block.dataset.id = s.id;
     block.style.left = `${(start / total) * 100}%`;
     block.style.width = `${(s.length / total) * 100}%`;
-    const kind = s.type === "image" ? "IMG" : "TEXT";
-    // Image shots render as a repeating filmstrip of the reference thumbnail so
-    // the timeline reads like a frame sequence rather than just prompt text.
+    const kind =
+      s.type === "image" ? "IMG" : s.type === "video" ? "VIDEO" : "TEXT";
+    // Image shots (and now video shots) render as a repeating filmstrip of the reference
+    // thumbnail so the timeline reads like a frame sequence rather than just prompt text.
+    const film = s.type === "video" ? s.poster : s.imageB64;
     block.innerHTML =
-      (s.imageB64
-        ? `<div class="b-film" style="background-image:url('${s.imageB64}')"></div>`
+      (film
+        ? `<div class="b-film" style="background-image:url('${film}')"></div>`
         : "") +
       `<div class="b-head"><span class="b-kind">${kind}</span></div>` +
       `<div class="b-prompt" title="${escapeHtml(s.prompt || "")}">${escapeHtml(s.prompt || "(no prompt)")}</div>` +
@@ -1032,8 +1088,8 @@ function renderClips() {
     state.videoClips,
     $("laneMotion"),
     $("useMotion").checked,
-    "Auto motion guidance (follows your shots)",
-    "Motion off",
+    "Add an IC-LoRA video for camera / video-to-video guidance",
+    "IC-LoRA off",
   );
   renderLane(
     "audio",
@@ -1260,12 +1316,22 @@ function selectSegment(id) {
   const ed = $("segEditor");
   ed.classList.remove("hidden");
   $("segEditorTitle").textContent =
-    s.type === "image" ? "Image shot" : "Text shot";
+    s.type === "image"
+      ? "Image shot"
+      : s.type === "video"
+        ? "Video shot"
+        : "Text shot";
   $("segPrompt").value = s.prompt || "";
   const wrap = $("segImageWrap");
   if (s.type === "image" && s.imageB64) {
     wrap.classList.remove("hidden");
     $("segImage").src = s.imageB64;
+    $("segReplaceImg").classList.remove("hidden");
+  } else if (s.type === "video" && s.poster) {
+    // Video shots preview the poster thumbnail; there is no in-place replace (delete + re-add).
+    wrap.classList.remove("hidden");
+    $("segImage").src = s.poster;
+    $("segReplaceImg").classList.add("hidden");
   } else wrap.classList.add("hidden");
   refreshSegEditorLen();
 }
@@ -1427,6 +1493,64 @@ function addMediaClip(kind, res) {
   });
 }
 
+// Add a video to the MAIN track as a shot — the "extend a video" path. The shot anchors to
+// the clip's real length (lockLen), so any timeline beyond it is generated as a continuation.
+// opts.doubleDuration stretches the timeline to 2× the clip first (used by Extend).
+function addVideoShot(res, opts = {}) {
+  probeDuration(res.url, "video", (dur) => {
+    const fps = curFps();
+    const len = dur > 0 ? Math.round(dur * fps) : Math.round(2 * fps);
+    if (opts.doubleDuration && dur > 0) {
+      const maxDur = parseInt($("duration").max) || 60;
+      $("duration").value = Math.min(maxDur, Math.max(1, Math.round(dur * 2)));
+    }
+    const seg = addSegment("video", "", {
+      imageFile: res.file,
+      videoUrl: res.url,
+      name: res.name,
+      lockLen: true,
+      length: len,
+    });
+    captureVideoPoster(res.url, (poster) => {
+      seg.poster = poster;
+      renderTimeline();
+      if (state.selectedId === seg.id) selectSegment(seg.id);
+    });
+  });
+}
+
+// Clear the timeline (shots + clips) so a flow can start from a blank studio.
+function resetTimeline() {
+  state.segments = [];
+  state.audioClips = [];
+  state.videoClips = [];
+  state.selectedId = null;
+  state.selectedClipId = null;
+  $("segEditor").classList.add("hidden");
+  $("clipEditor").classList.add("hidden");
+  $("globalView").classList.remove("hidden");
+}
+
+// Extend a generated video: open a fresh studio timeline with the source video on the main
+// track and the duration set to double the clip, so the second half renders as a continuation.
+async function extendVideo(m) {
+  if (!m.video) return;
+  try {
+    const blob = await fetch(m.video).then((r) => r.blob());
+    const fd = new FormData();
+    fd.append("file", blob, `${m.name || "clip"}.mp4`);
+    const res = await fetch("/api/upload-media", {
+      method: "POST",
+      body: fd,
+    }).then((r) => r.json());
+    enterStudio();
+    resetTimeline();
+    addVideoShot(res, { doubleDuration: true });
+  } catch {
+    alert("Could not load that video to extend.");
+  }
+}
+
 /* ------------------------------- composition preview ------------------------------- */
 /* Plays back the timeline the user composed: image shots hold on screen for their
    span, motion-video clips play, audio clips are heard, a text shot shows its prompt
@@ -1455,6 +1579,17 @@ function activeVisual(frame) {
   for (const s of state.segments) {
     if (frame >= cursor && frame < cursor + s.length) {
       if (s.type === "image" && s.imageB64) return { kind: "image", seg: s };
+      if (s.type === "video" && s.videoUrl)
+        return {
+          kind: "video",
+          clip: {
+            id: s.id,
+            url: s.videoUrl,
+            start: cursor,
+            length: s.length,
+            trimStart: s.trimStart || 0,
+          },
+        };
       return { kind: "text", seg: s };
     }
     cursor += s.length;
@@ -1671,6 +1806,12 @@ function buildTimelineData() {
       seg.imageFile = s.imageFile;
       seg.imageB64 = s.imageB64;
     }
+    // A main-track video shot is passed as a video guide: LTX Director reads the engine
+    // input filename from `imageFile` for both image and video segments (type discriminates).
+    if (s.type === "video" && s.imageFile) {
+      seg.imageFile = s.imageFile;
+      seg.trimStart = s.trimStart || 0;
+    }
     cursor += s.length;
     return seg;
   });
@@ -1705,7 +1846,9 @@ function buildTimelineData() {
     retakeStrength: 1,
     retakeVideo: null,
     normalStartFrame: 0,
-    normalDurationFrames: cursor,
+    // Render the full timeline length, not just the covered shots — a video shot that
+    // occupies only the first part leaves a generated tail (this is how "extend" works).
+    normalDurationFrames: Math.max(cursor, frames()),
     segments,
     motionSegments,
     audioSegments,
@@ -2467,7 +2610,12 @@ function wireEvents() {
   $("addText").addEventListener("click", () => addSegment("text", ""));
   $("addImage").addEventListener("click", pickImage);
   $("addAudio").addEventListener("click", openAudioModal);
+  // + Video adds to the MAIN track (for extending a video); + IC-LoRA adds to the
+  // separate IC-LoRA/motion lane (camera / video-to-video guidance).
   $("addVideo").addEventListener("click", () =>
+    uploadMedia("video", (res) => addVideoShot(res)),
+  );
+  $("addMotion").addEventListener("click", () =>
     uploadMedia("video", (res) => addMediaClip("video", res)),
   );
 

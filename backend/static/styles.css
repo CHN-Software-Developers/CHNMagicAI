@@ -808,6 +808,16 @@ select option {
   background: rgba(56, 189, 248, 0.22);
   color: #d6f2ff;
 }
+/* Main-track video shot (the "extend a video" segment) — emerald, distinct from the
+   violet IC-LoRA clips on the separate lane. */
+.tl-block.video {
+  border-left: 3px solid #34d399;
+  background: #0c2620;
+}
+.tl-block.video .b-kind {
+  background: rgba(52, 211, 153, 0.22);
+  color: #d6ffee;
+}
 .tl-block .b-prompt {
   position: relative;
   z-index: 1;
@@ -1375,14 +1385,21 @@ select option {
   opacity: 1;
   visibility: visible;
 }
+/* Modals are a flex column: a fixed header (never scrolls), a scrollable body
+   (.modal-scroll), and an optional fixed footer (.modal-foot) for action buttons.
+   This keeps tabs/titles pinned at the top and Generate/Save pinned at the bottom on
+   small screens — only the middle content scrolls. Padding lives on the head/body/foot
+   (the box itself has none) so the scroll region reaches edge to edge. */
 .modal-box {
   background: var(--panel);
   border: 1px solid var(--line2);
   border-radius: 16px;
-  padding: 22px;
+  padding: 0;
   width: min(720px, 100%);
   max-height: 86vh;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   box-shadow: var(--shadow);
   transform: translateY(18px) scale(0.96);
   opacity: 0.5;
@@ -1398,14 +1415,33 @@ select option {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
+  flex: none;
+  padding: 18px 22px 12px;
+  border-bottom: 1px solid var(--line);
 }
 .modal-head h2 {
   margin: 0;
   font-size: 19px;
 }
+/* Scrollable body of a modal. */
+.modal-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 22px 20px;
+}
+/* Fixed action bar pinned to the bottom of a modal. */
+.modal-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 14px 22px;
+  border-top: 1px solid var(--line);
+}
 .modal .settings-grid {
-  margin-top: 14px;
+  margin-top: 4px;
 }
 .modal .toggles {
   margin-top: 18px;
@@ -1555,6 +1591,23 @@ code {
 
 #audioModal .modal-box {
   width: min(880px, 100%);
+}
+/* Tabs sit between the fixed head and the scroll body — pinned, never scrolling. */
+#audioModal .tabs {
+  flex: none;
+  margin: 0;
+  padding: 8px 22px 0;
+}
+/* Keep the Generate button pinned to the bottom of the (scrolling) left column so it is
+   always reachable on small screens. The preview + "Add to track" column is sticky-topped
+   below, so both primary actions stay visible while the form scrolls. */
+#audioModal .tts-generate-row {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--panel);
+  padding: 10px 0 2px;
+  margin-top: auto;
 }
 
 .tts-grid {
