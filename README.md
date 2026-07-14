@@ -1,4 +1,5 @@
 # CHNMagicAI
+![Static Badge](https://img.shields.io/badge/Development%20in%20progress-8A2BE2)
 
 The next-generation AI movie production software powered by ComfyUI, WhatDreamsCost LTX Director 2 and CosyVoice.
 
