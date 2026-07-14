@@ -18,6 +18,15 @@ workflows/       ltx_director_2.api.json (the LTX Director 2 pipeline in ComfyUI
 scripts/         Maintenance tools (re-vendor the engine, convert a workflow)
 ```
 
+## Features
+
+- Facility to arrange prompts and assets in an interactive timeline for better AI generation results (Powered by LTX Director).
+- Voice consistency and cloning.
+- Moods generator for voice cloning.
+- Extend videos and link to the last frame.
+- Full character generator (Coming in the future).
+- Timeline edit and export full movies (Coming in the future).
+
 ## Quick start
 
 If you are planning to make movies in your local environment for free of cost, you can use the desktop installer and set up the software on your own device. However, if your device doesn't meet the minimum required system requirements or is having issues running locally, you can try the app in a Runpod environment using our prebuild runpod template (extra costs from Runpod may apply based on your pod usage). 
@@ -34,6 +43,8 @@ If you are planning to make movies in your local environment for free of cost, y
 </table>
 
 ## Minimum system requirements
+
+> It is recommended to go up with maximum 720p 10sec max videos (20 steps and 4 upscaler steps) if your system is limited to the following minimum requirements.
 
 <table>
   <tr>
