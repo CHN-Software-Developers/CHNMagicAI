@@ -33,7 +33,12 @@ LOCAL_CONFIG_PATH = os.path.join(ROOT, "config", "settings.local.json")
 # Names of the vendored custom-node packages that ship inside engine/ComfyUI/custom_nodes. Used to
 # verify their presence and to install their requirements; NOT to fetch them (they're committed).
 CUSTOM_NODES = ["WhatDreamsCost-ComfyUI", "comfyui-kjnodes", "cinematic_audio_separation"]
-TORCH_PKGS = ["torch", "torchsde", "torchvision", "torchaudio"]
+# Hosted on the PyTorch wheel index (setup.torch_index_url, e.g. .../whl/cu128).
+TORCH_PKGS = ["torch", "torchvision", "torchaudio"]
+# torchsde is a plain PyPI package — it is NOT on the PyTorch wheel index, so it must be installed
+# from the default index. Passing it alongside --index-url (which replaces PyPI) makes pip fail with
+# "No matching distribution found for torchsde".
+TORCH_PYPI_PKGS = ["torchsde"]
 # Deps required by vendored custom nodes that ship no requirements.txt.
 # cinematic_audio_separation imports soundfile at module load, and its BandIt Plus
 # inference subprocess (msst framework) top-level-imports librosa / omegaconf /
@@ -173,7 +178,7 @@ def _load_state():
 
 # Representative modules spanning torch, ComfyUI core, node deps and our backend. If all import,
 # the env is already provisioned (e.g. user ran vendor_engine.py) and we skip pip entirely.
-_PROBE_MODULES = ["torch", "sqlalchemy", "filelock", "blake3", "PIL", "tqdm", "av", "aiohttp",
+_PROBE_MODULES = ["torch", "torchsde", "sqlalchemy", "filelock", "blake3", "PIL", "tqdm", "av", "aiohttp",
                   "fastapi", "uvicorn", "numpy", "transformers", "safetensors", "soundfile",
                   # cinematic_audio_separation (BandIt Plus) inference deps:
                   "librosa", "omegaconf", "pytorch_lightning", "spafe", "ml_collections"]
@@ -201,10 +206,15 @@ def ensure_deps(py, setup):
 
     pip(py, ["--upgrade", "pip"], trusted)
 
-    if setup.get("auto_install_torch", True) and not _module_present(py, "torch"):
-        phase(30, "Installing PyTorch (GPU) — please wait...")
-        log("installing PyTorch (CUDA). Change setup.torch_index_url for a different GPU/CPU build.")
-        pip(py, TORCH_PKGS + ["--index-url", setup["torch_index_url"]], trusted)
+    if setup.get("auto_install_torch", True):
+        if not _module_present(py, "torch"):
+            phase(30, "Installing PyTorch (GPU) — please wait...")
+            log("installing PyTorch (CUDA). Change setup.torch_index_url for a different GPU/CPU build.")
+            pip(py, TORCH_PKGS + ["--index-url", setup["torch_index_url"]], trusted)
+        if not _module_present(py, "torchsde"):
+            # From PyPI (default index) — torchsde is not on the pytorch wheel index.
+            log("installing torchsde (from PyPI).")
+            pip(py, TORCH_PYPI_PKGS, trusted)
 
     comfy_req = os.path.join(COMFY_DST, "requirements.txt")
     if os.path.isfile(comfy_req):
