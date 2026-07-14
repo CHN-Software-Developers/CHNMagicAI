@@ -40,8 +40,40 @@ def load_settings():
     return settings
 
 
+def _located_model_dirs(models_dir, settings):
+    """Where 'located'/overridden model files actually live, so the engine can also search there.
+
+    A user can point the app at an already-downloaded model ("Locate existing"); the source is
+    recorded in settings.model_overrides. Normally the file is also hard-linked into `models_dir`,
+    but that link lives in whichever data dir was active at the time. When a *different* data dir is
+    used later (the desktop app's %APPDATA% tree, RunPod's /workspace) `models_dir` can be empty even
+    though the files exist elsewhere — the engine then rejects the graph with "<name> not in []".
+    Registering the real folders here makes the basenames resolve regardless of the active data dir.
+
+    Returns (roots, extra) where `roots` are standard `<root>/<subfolder>/<file>` layout roots (mapped
+    with the full subfolder list, like the primary provider) and `extra` maps a category -> dirs for
+    any file that isn't in a folder named after its category."""
+    roots, extra = set(), {}
+    try:
+        import models as model_mgr
+        for s in model_mgr.model_status(models_dir, settings):
+            p = s.get("located_path")
+            if not (p and os.path.isfile(p)):
+                continue
+            d = os.path.dirname(os.path.abspath(p))
+            sf = (s.get("dest_subfolder") or "").strip()
+            if sf and os.path.basename(d).lower() == sf.lower():
+                roots.add(os.path.dirname(d))          # <root>/<subfolder>/<file>
+            elif sf:
+                extra.setdefault(sf, set()).add(d)     # non-standard layout: register the exact dir
+    except Exception as e:  # never let model scanning block engine startup
+        print(f"[launcher] warning: could not scan located models: {e}")
+    return roots, extra
+
+
 def write_extra_model_paths(settings):
-    """Point the engine at our app-managed models folder (fully decoupled from any other ComfyUI)."""
+    """Point the engine at our app-managed models folder (fully decoupled from any other ComfyUI),
+    plus the real folders of any located/overridden models so their basenames always resolve."""
     models_dir = os.path.join(ROOT, settings["models_dir"])
     yaml_path = os.path.join(ROOT, "config", "extra_model_paths.yaml")
     subfolders = ["checkpoints", "diffusion_models", "text_encoders", "clip", "vae",
@@ -50,6 +82,25 @@ def write_extra_model_paths(settings):
              f"  base_path: {models_dir.replace(os.sep, '/')}"]
     for sf in subfolders:
         lines.append(f"  {sf}: {sf}")
+
+    # Additional search paths for located/overridden models (see _located_model_dirs). ComfyUI
+    # accumulates every provider's paths per category, so these are purely additive.
+    roots, extra = _located_model_dirs(models_dir, settings)
+    for i, root in enumerate(sorted(roots)):
+        if os.path.normpath(root) == os.path.normpath(models_dir):
+            continue  # already the primary provider
+        lines.append(f"chnmagicai_located{i}:")
+        lines.append(f"  base_path: {root.replace(os.sep, '/')}")
+        for sf in subfolders:
+            lines.append(f"  {sf}: {sf}")
+    j = 0
+    for sf, dirs in sorted(extra.items()):
+        for d in sorted(dirs):
+            lines.append(f"chnmagicai_ovr{j}:")
+            lines.append(f"  base_path: {d.replace(os.sep, '/')}")
+            lines.append(f"  {sf}: .")
+            j += 1
+
     with open(yaml_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     return yaml_path

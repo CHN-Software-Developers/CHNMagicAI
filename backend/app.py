@@ -131,7 +131,21 @@ store = projects_mod.ProjectStore()
 # so the trailing `executing {node: null}` (which ComfyUI sends even after a failure) is not
 # mistaken for a successful completion. `project_id`/`meta` remember which project (if any) the
 # result should be filed into and the settings snapshot to store with it.
-_current = {"prompt_id": None, "errored": False, "project_id": None, "meta": None, "character": None}
+#
+# `active`, `stage`, `value`/`max` and `seed` are the live snapshot a *reconnecting* browser reads
+# from GET /api/job so a page that was refreshed mid-generation can re-enter phase 2 and pick the
+# progress bar back up (the run keeps going server-side regardless of who is connected).
+_current = {"prompt_id": None, "errored": False, "project_id": None, "meta": None, "character": None,
+            "active": False, "kind": None, "stage": None, "value": None, "max": None, "seed": None}
+
+# Live download snapshot (model id -> {pct, downloaded, total, status, message}) so a reconnecting
+# browser can re-open the Models panel and see in-flight downloads resume their progress.
+_downloads: dict = {}
+
+
+def _reset_current_job():
+    _current.update({"active": False, "kind": None, "stage": None,
+                     "value": None, "max": None})
 
 
 @app.on_event("startup")
@@ -172,6 +186,7 @@ async def _consume(queue):
                 await hub.broadcast({"type": "preview", "mime": mime,
                                      "image": f"data:{mime};base64,{img}"})
         elif mtype == "progress":
+            _current["value"], _current["max"] = data.get("value"), data.get("max")
             await hub.broadcast({"type": "progress", "value": data.get("value"),
                                  "max": data.get("max")})
         elif mtype == "executing":
@@ -181,15 +196,19 @@ async def _consume(queue):
                 # real completion if no execution_error was reported for this prompt.
                 if _current["errored"]:
                     _current["errored"] = False
+                    _reset_current_job()
                 else:
                     await _on_complete(data.get("prompt_id"))
+                    _reset_current_job()
             else:
-                await hub.broadcast({"type": "stage", "node": node,
-                                     "label": STAGE_LABELS.get(str(node), "Working")})
+                label = STAGE_LABELS.get(str(node), "Working")
+                _current["stage"] = label
+                await hub.broadcast({"type": "stage", "node": node, "label": label})
         elif mtype in ("execution_error",):
             if data.get("prompt_id") == _current["prompt_id"]:
                 _current["errored"] = True
                 _fail_current_character()
+                _reset_current_job()
             await hub.broadcast({"type": "error",
                                  "message": _format_error(data)})
             await _free_models()
@@ -197,6 +216,7 @@ async def _consume(queue):
             if data.get("prompt_id") == _current["prompt_id"]:
                 _current["errored"] = True
                 _fail_current_character()
+                _reset_current_job()
             await hub.broadcast({"type": "error", "message": "Generation was interrupted."})
             await _free_models()
         elif mtype in ("status",):
@@ -444,6 +464,30 @@ async def healthz():
     return {"ok": True, "engine": engine_ok}
 
 
+@app.get("/api/job")
+async def api_job():
+    """Snapshot of work still running server-side, so a browser that was refreshed/closed and
+    reopened can restore its UI: an in-flight generation (re-enter phase 2 + resume the progress
+    bar) and any in-flight model downloads (re-open the Models panel with live progress). Desktop
+    doesn't use this to persist across close — closing the desktop app kills the whole server."""
+    gen = None
+    if _current.get("active"):
+        pct = None
+        if _current.get("max"):
+            try:
+                pct = round((_current["value"] or 0) * 100 / _current["max"])
+            except Exception:
+                pct = None
+        gen = {
+            "kind": _current.get("kind") or "generation",
+            "project_id": _current.get("project_id"),
+            "stage": _current.get("stage"),
+            "progress_pct": pct,
+            "seed": _current.get("seed"),
+        }
+    return {"generation": gen, "downloads": list(_downloads.values())}
+
+
 @app.get("/api/config")
 async def api_config():
     return {
@@ -475,19 +519,28 @@ async def api_download(req: Request):
     loop = asyncio.get_event_loop()
 
     state = {"last_pct": -1}
+    mid = model["id"]
 
     def cb(done, total):
         pct = int(done * 100 / total) if total else 0
         if pct != state["last_pct"]:
             state["last_pct"] = pct
+            _downloads[mid] = {"id": mid, "downloaded": done, "total": total,
+                               "pct": pct, "status": "downloading"}
             loop.call_soon_threadsafe(asyncio.ensure_future, hub.broadcast(
-                {"type": "download", "id": model["id"], "downloaded": done, "total": total, "pct": pct}))
+                {"type": "download", "id": mid, "downloaded": done, "total": total, "pct": pct}))
 
     async def run():
-        await hub.broadcast({"type": "download", "id": model["id"], "pct": 0, "status": "start"})
+        _downloads[mid] = {"id": mid, "pct": 0, "status": "downloading"}
+        await hub.broadcast({"type": "download", "id": mid, "pct": 0, "status": "start"})
         ok, message = await model_mgr.download_model(
             model, models_dir, progress_cb=cb, hf_token=os.environ.get("HF_TOKEN"))
-        await hub.broadcast({"type": "download", "id": model["id"], "pct": 100 if ok else state["last_pct"],
+        # Keep only unfinished/failed downloads in the resume snapshot; a completed one drops off.
+        if ok:
+            _downloads.pop(mid, None)
+        else:
+            _downloads[mid] = {"id": mid, "pct": state["last_pct"], "status": "error", "message": message}
+        await hub.broadcast({"type": "download", "id": mid, "pct": 100 if ok else state["last_pct"],
                              "status": "done" if ok else "error", "message": message})
 
     asyncio.create_task(run())
@@ -560,6 +613,53 @@ async def api_upload_media(file: UploadFile = File(...)):
     }
 
 
+def _engine_error_msg(e):
+    """Turn an exception from queueing a prompt into a short, meaningful message for the user.
+
+    ComfyUI rejects an invalid graph *before* execution with an HTTP error whose body carries the
+    real reason (a missing model file, an unknown node, a bad input). `comfy_client.queue_prompt`
+    wraps that as `RuntimeError("ComfyUI /prompt error: {json}")`; we parse it back out and surface
+    the specific validation message instead of an opaque 500. Connection errors mean the engine
+    isn't reachable. Anything else falls back to the raw text (trimmed)."""
+    if isinstance(e, (aiohttp.ClientConnectionError, aiohttp.ClientConnectorError)):
+        return "The generation engine isn't responding. Please try again in a moment."
+    text = str(e)
+    marker = "ComfyUI /prompt error:"
+    if marker in text:
+        try:
+            body = json.loads(text.split(marker, 1)[1].strip())
+        except Exception:
+            body = None
+        if isinstance(body, dict):
+            parts = []
+            err = body.get("error")
+            if isinstance(err, dict) and err.get("message"):
+                parts.append(str(err["message"]))
+            # Node-level validation details are usually the actionable bit ("required input missing",
+            # "value not in list" for a model that isn't installed, etc.).
+            for node in (body.get("node_errors") or {}).values():
+                for ne in (node.get("errors") or []) if isinstance(node, dict) else []:
+                    msg = ne.get("message")
+                    det = ne.get("details")
+                    if msg:
+                        parts.append(f"{msg}{f' ({det})' if det else ''}")
+            if parts:
+                msg = " — ".join(dict.fromkeys(parts))  # de-dupe, keep order
+                return f"The engine rejected the generation: {msg[:300]}"
+    return f"Couldn't start the generation: {text[:200]}"
+
+
+def _summary_prompt(timeline, params):
+    """A short human label stored with the media item and shown on its card. Prefer the global
+    prompt; otherwise fall back to the per-segment prompts joined together (so a timeline built from
+    only segment prompts, with no global prompt, still shows meaningful text) — the card truncates it."""
+    g = (timeline.get("global_prompt") or params.get("prompt") or "").strip()
+    if g:
+        return g
+    parts = [str(s.get("prompt", "")).strip() for s in (timeline.get("segments") or [])]
+    return " · ".join(p for p in parts if p)
+
+
 async def _queue_prompt(params):
     """Build and queue a prompt on ComfyUI, freeing the voice engine's VRAM first. Returns
     (prompt_id, seed). Shared by normal generations and character reference-video generations.
@@ -576,6 +676,11 @@ async def _queue_prompt(params):
         prompt_id = await comfy.queue_prompt(session, prompt)
     _current["prompt_id"] = prompt_id
     _current["errored"] = False
+    _current["active"] = True
+    _current["stage"] = "Starting…"
+    _current["value"] = None
+    _current["max"] = None
+    _current["seed"] = seed
     return prompt_id, seed
 
 
@@ -585,12 +690,17 @@ async def api_generate(req: Request):
     if not model_mgr.all_required_present(os.path.join(ROOT, settings["models_dir"]), settings):
         return JSONResponse({"error": "Some required models are missing. Open the Models panel."},
                             status_code=400)
-    prompt_id, seed = await _queue_prompt(params)
+    try:
+        prompt_id, seed = await _queue_prompt(params)
+    except Exception as e:
+        _reset_current_job()
+        return JSONResponse({"error": _engine_error_msg(e)}, status_code=502)
     _current["project_id"] = params.get("project_id")
     _current["character"] = None
+    _current["kind"] = "generation"
     timeline = params.get("timeline") or {}
     _current["meta"] = {
-        "prompt": timeline.get("global_prompt") or params.get("prompt") or "",
+        "prompt": _summary_prompt(timeline, params),
         "seed": seed,
         "resolution": params.get("resolution"),
         "aspect": params.get("aspect"),
@@ -852,9 +962,10 @@ async def api_character_create(project_id: str, req: Request):
         prompt_id, seed = await _queue_prompt(params)
     except Exception as e:
         store.set_character_error(project_id, char["id"])
-        return JSONResponse({"ok": False, "error": f"Could not start generation: {e}"}, status_code=500)
+        return JSONResponse({"ok": False, "error": _engine_error_msg(e)}, status_code=502)
     _current["project_id"] = None       # character gens don't file a normal MediaItem
     _current["character"] = marker
+    _current["kind"] = "character"
     _current["meta"] = {"prompt": timeline.get("global_prompt"), "seed": seed}
     await hub.broadcast({"type": "queued", "prompt_id": prompt_id, "seed": seed,
                          "character_id": char["id"]})
