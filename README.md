@@ -8,12 +8,12 @@ The next-generation AI movie production software powered by ComfyUI, WhatDreamsC
 ## Layout
 
 ```
-backend/         FastAPI orchestrator + launcher + first-run bootstrap (our code)
-backend/static/  No-build vanilla-JS SPA (our code) — the timeline UI, served as-is
+backend/         FastAPI orchestrator + launcher + first-run bootstrap
+backend/static/  No-build vanilla-JS SPA — the timeline UI, served as-is
 engine/          Bundled ComfyUI + LTX Director / KJNodes / audio-separation nodes (GPL-3.0)
 models/          App-managed model weights, downloaded/located on first use (git-ignored)
 output/          Generated videos (git-ignored)
-config/          settings.json, models_manifest.json (user-editable)
+config/          settings.json and models_manifest.json
 workflows/       ltx_director_2.api.json (the LTX Director 2 pipeline in ComfyUI API format)
 scripts/         Maintenance tools (re-vendor the engine, convert a workflow)
 ```
@@ -22,10 +22,33 @@ scripts/         Maintenance tools (re-vendor the engine, convert a workflow)
 
 If you are planning to make movies in your local environment for free of cost, you can use the desktop installer and set up the software on your own device. However, if your device doesn't meet the minimum required system requirements or is having issues running locally, you can try the app in a Runpod environment using our prebuild runpod template (extra costs from Runpod may apply based on your pod usage). 
 
-| Type | Download |
-|---|---|
-| Desktop installer | ... |
-| Runpod template | ... |
+<table>
+  <tr>
+    <td>Desktop installer</td>
+    <td>...</td>
+  </tr>
+  <tr>
+    <td>Try on Runpod</td>
+    <td>...</td>
+  </tr>
+</table>
+
+## Minimum system requirements
+
+<table>
+  <tr>
+    <td>VRAM</td>
+    <td>8GB or more</td>
+  </tr>
+  <tr>
+    <td>RAM</td>
+    <td>32GB more more</td>
+  </tr>
+  <tr>
+    <td>Virtual Memory</td>
+    <td>Enabled with Fast SSD to avoid freezing the device with minimum requirements (i.e., Windows paging)</td>
+  </tr>
+</table>
 
 ## Development
 
