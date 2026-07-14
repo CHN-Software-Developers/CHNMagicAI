@@ -26,6 +26,7 @@ scripts/         Maintenance tools (re-vendor the engine, convert a workflow)
 - Extend videos and link to the last frame.
 - Full character generator (Coming in the future).
 - Timeline edit and export full movies (Coming in the future).
+- Apply motions and effects (Coming in the future).
 
 ## Quick start
 
@@ -68,3 +69,7 @@ If you are planning to make movies in your local environment for free of cost, y
 - Re-vendor / update the bundled engine from a local ComfyUI or upstream: `python scripts/vendor_engine.py`
 - Per-machine settings (interpreter path, located model paths) live in the git-ignored
   `config/settings.local.json`, which overrides `config/settings.json` at load time.
+
+## Contribution
+
+Special thanks ❤️‍🩹 to Claude Code for helping speed up the development process of CHNMagicAI.
