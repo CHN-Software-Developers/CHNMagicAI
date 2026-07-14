@@ -1,0 +1,18 @@
+# Build context = repo root (docker build -f docker/Dockerfile .). Keep it small; never ship
+# host-specific or heavy trees — the engine venv and models are (re)built/downloaded, not copied.
+.git
+.venv
+engine/python
+engine/.setup_state.json
+engine/python_path.txt
+models
+output
+other-installs
+desktop/node_modules
+desktop/python
+desktop/dist
+dist
+**/__pycache__
+**/*.pyc
+config/settings.local.json
+config/extra_model_paths.yaml

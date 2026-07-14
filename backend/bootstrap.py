@@ -33,7 +33,12 @@ LOCAL_CONFIG_PATH = os.path.join(ROOT, "config", "settings.local.json")
 # Names of the vendored custom-node packages that ship inside engine/ComfyUI/custom_nodes. Used to
 # verify their presence and to install their requirements; NOT to fetch them (they're committed).
 CUSTOM_NODES = ["WhatDreamsCost-ComfyUI", "comfyui-kjnodes", "cinematic_audio_separation"]
-TORCH_PKGS = ["torch", "torchsde", "torchvision", "torchaudio"]
+# Hosted on the PyTorch wheel index (setup.torch_index_url, e.g. .../whl/cu128).
+TORCH_PKGS = ["torch", "torchvision", "torchaudio"]
+# torchsde is a plain PyPI package — it is NOT on the PyTorch wheel index, so it must be installed
+# from the default index. Passing it alongside --index-url (which replaces PyPI) makes pip fail with
+# "No matching distribution found for torchsde".
+TORCH_PYPI_PKGS = ["torchsde"]
 # Deps required by vendored custom nodes that ship no requirements.txt.
 # cinematic_audio_separation imports soundfile at module load, and its BandIt Plus
 # inference subprocess (msst framework) top-level-imports librosa / omegaconf /
@@ -45,6 +50,11 @@ EXTRA_NODE_DEPS = ["soundfile", "librosa", "omegaconf", "pytorch-lightning",
 
 def log(msg):
     print(f"[setup] {msg}", flush=True)
+
+
+def phase(pct, msg):
+    """Progress anchor for the Electron splash (see launcher.phase). Parsed from stdout."""
+    print(f"AIVB_PHASE|{pct}|{msg}", flush=True)
 
 
 def run(cmd, cwd=None):
@@ -60,6 +70,9 @@ def load_settings():
         with open(LOCAL_CONFIG_PATH, "r", encoding="utf-8") as f:
             local = json.load(f)
         settings.update(local)
+    sys.path.insert(0, os.path.dirname(__file__))
+    import env as env_mod
+    env_mod.apply(settings)
     return settings
 
 
@@ -165,7 +178,7 @@ def _load_state():
 
 # Representative modules spanning torch, ComfyUI core, node deps and our backend. If all import,
 # the env is already provisioned (e.g. user ran vendor_engine.py) and we skip pip entirely.
-_PROBE_MODULES = ["torch", "sqlalchemy", "filelock", "blake3", "PIL", "tqdm", "av", "aiohttp",
+_PROBE_MODULES = ["torch", "torchsde", "sqlalchemy", "filelock", "blake3", "PIL", "tqdm", "av", "aiohttp",
                   "fastapi", "uvicorn", "numpy", "transformers", "safetensors", "soundfile",
                   # cinematic_audio_separation (BandIt Plus) inference deps:
                   "librosa", "omegaconf", "pytorch_lightning", "spafe", "ml_collections"]
@@ -193,12 +206,19 @@ def ensure_deps(py, setup):
 
     pip(py, ["--upgrade", "pip"], trusted)
 
-    if setup.get("auto_install_torch", True) and not _module_present(py, "torch"):
-        log("installing PyTorch (CUDA). Change setup.torch_index_url for a different GPU/CPU build.")
-        pip(py, TORCH_PKGS + ["--index-url", setup["torch_index_url"]], trusted)
+    if setup.get("auto_install_torch", True):
+        if not _module_present(py, "torch"):
+            phase(30, "Installing PyTorch (GPU) — please wait...")
+            log("installing PyTorch (CUDA). Change setup.torch_index_url for a different GPU/CPU build.")
+            pip(py, TORCH_PKGS + ["--index-url", setup["torch_index_url"]], trusted)
+        if not _module_present(py, "torchsde"):
+            # From PyPI (default index) — torchsde is not on the pytorch wheel index.
+            log("installing torchsde (from PyPI).")
+            pip(py, TORCH_PYPI_PKGS, trusted)
 
     comfy_req = os.path.join(COMFY_DST, "requirements.txt")
     if os.path.isfile(comfy_req):
+        phase(45, "Installing engine dependencies...")
         log("installing ComfyUI requirements (sqlalchemy, filelock, blake3, Pillow, tqdm, comfy-aimdo, av, ...)")
         pip(py, ["-r", comfy_req], trusted)
 
@@ -350,7 +370,7 @@ set "GPU_INDEX={gpu_index}"
 set "GPU_PACKAGES={gpu_packages}"
 
 echo ============================================================
-echo   AIVideoBuilder - Voice engine (CosyVoice 3) installer
+echo   CHNMagicAI - Voice engine (CosyVoice 3) installer
 echo   Install location: %INSTALL_DIR%
 echo ============================================================
 echo.
@@ -483,19 +503,33 @@ def _launch_in_new_console(script_path):
         subprocess.Popen(["sh", script_path])
 
 
-def default_tts_install_dir():
-    """Per-machine home for the voice engine (CosyVoice clone + private venv + downloaded model
-    weights and caches) when the user hasn't chosen a location. Deliberately OUTSIDE the app repo —
-    a platform-appropriate per-user app-data dir — so a default install never dumps a multi-GB tree
-    into the working copy (which showed up as an untracked `tts_engine/`). The user can still point
-    this anywhere via the Models panel (persisted to settings.local.json)."""
+def app_data_dir(*parts):
+    """Return a platform-appropriate per-user app-data path under CHNMagicAI/, joined with *parts.
+
+    This is the shared home for anything that must live OUTSIDE the repo working copy (voice-engine
+    install, the projects registry, etc.) so defaults never dump large trees into the checkout.
+
+    When AIVB_DATA_DIR is set (Electron desktop / RunPod /workspace), everything is relocated there
+    so app data lands on the writable/persistent volume instead of the OS app-data dir."""
+    override = (os.environ.get("AIVB_DATA_DIR") or "").strip()
+    if override:
+        return os.path.join(os.path.abspath(override), *parts)
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
     elif sys.platform == "darwin":
         base = os.path.join(os.path.expanduser("~"), "Library", "Application Support")
     else:
         base = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
-    return os.path.join(base, "AIVideoBuilder", "tts_engine")
+    return os.path.join(base, "CHNMagicAI", *parts)
+
+
+def default_tts_install_dir():
+    """Per-machine home for the voice engine (CosyVoice clone + private venv + downloaded model
+    weights and caches) when the user hasn't chosen a location. Deliberately OUTSIDE the app repo —
+    a platform-appropriate per-user app-data dir — so a default install never dumps a multi-GB tree
+    into the working copy (which showed up as an untracked `tts_engine/`). The user can still point
+    this anywhere via the Models panel (persisted to settings.local.json)."""
+    return app_data_dir("tts_engine")
 
 
 def resolve_tts_install_dir(tts_cfg):
@@ -547,9 +581,12 @@ def main():
         log("setup.auto is false; skipping bootstrap.")
         py = settings.get("python_exe") or venv_python() or sys.executable
     else:
+        phase(10, "Verifying the engine source...")
         verify_engine_source()
+        phase(20, "Creating the Python environment...")
         py = ensure_venv(setup)
         ensure_deps(py, setup)
+        phase(55, "Finalizing setup...")
 
     save_local({"python_exe": py})
     with open(PY_PATH_FILE, "w", encoding="utf-8") as f:

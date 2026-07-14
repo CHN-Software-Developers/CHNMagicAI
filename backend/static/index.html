@@ -3,22 +3,41 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AIVideoBuilder — LTX Director 2</title>
+    <title>CHNMagicAI — AI video studio</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
-  <body data-phase="setup">
+  <body data-screen="projects" data-phase="setup">
     <header class="topbar">
-      <div class="brand">
+      <button
+        class="brand"
+        id="brandHome"
+        type="button"
+        title="Projects workspace"
+      >
         <span class="logo">🎬</span>
         <div>
-          <h1>AIVideoBuilder</h1>
-          <p class="tagline">
-            LTX Director&nbsp;2 &middot; local AI video studio
-          </p>
+          <h1>CHNMagicAI</h1>
+          <p class="tagline">local AI video studio</p>
         </div>
+      </button>
+
+      <!-- Contextual breadcrumb (library / studio) -->
+      <div class="crumb" id="crumb">
+        <button class="crumb-projects" id="crumbProjects" type="button">
+          ← Projects
+        </button>
+        <span class="crumb-sep">▸</span>
+        <button
+          class="crumb-project"
+          id="crumbProject"
+          type="button"
+          title="Back to this project's media"
+        >
+          Project
+        </button>
       </div>
 
-      <!-- 3-step stepper (Compose → Generate → Result) -->
+      <!-- 3-step stepper (Compose → Generate → Result) — studio only -->
       <nav class="stepper" id="stepper" aria-label="Progress">
         <button class="step" data-step="setup" type="button">
           <span class="dot">1</span><span class="lbl">Compose</span>
@@ -39,227 +58,383 @@
       </div>
     </header>
 
-    <main class="stage">
+    <!-- ============ SCREEN — PROJECTS WORKSPACE (landing) ============ -->
+    <section id="screenProjects" class="screen screen-projects">
+      <div class="workspace">
+        <div class="ws-head">
+          <div class="ws-head-info">
+            <h2 class="ws-title">Your projects</h2>
+            <p class="ws-sub">
+              Each project keeps its generated videos, audio and stills
+              together. Create a new one or open an existing project folder.
+            </p>
+          </div>
+          <div class="ws-actions">
+            <button class="btn btn-ghost" id="openExisting">
+              📂 Open existing…
+            </button>
+            <button class="btn btn-primary" id="newProject">
+              ＋ New project
+            </button>
+          </div>
+        </div>
+        <div id="projectGrid" class="project-grid"></div>
+        <div id="projectsEmpty" class="ws-empty hidden">
+          <div class="ws-empty-icon">🎬</div>
+          <h3>No projects yet</h3>
+          <p>Create your first project to start generating.</p>
+          <button class="btn btn-primary" id="newProjectEmpty">
+            ＋ New project
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ SCREEN — PROJECT MEDIA SPACE (library) ============ -->
+    <section id="screenLibrary" class="screen screen-library">
+      <div class="library">
+        <div class="lib-head">
+          <div class="lib-head-info">
+            <h2 class="lib-title" id="libTitle">Project</h2>
+            <p class="lib-sub" id="libSub">0 items</p>
+          </div>
+          <div class="lib-actions" id="libActions">
+            <button class="btn btn-ghost btn-sm" id="libRename">
+              ✎ Rename
+            </button>
+            <button class="btn btn-primary btn-lg" id="newGeneration">
+              ＋ New generation
+            </button>
+            <button class="btn btn-primary btn-lg hidden" id="newCharacter">
+              ＋ New character
+            </button>
+          </div>
+        </div>
+
+        <div class="lib-tabs" id="libTabs">
+          <button class="lib-tab active" data-libtab="media">🎞 Media</button>
+          <button class="lib-tab" data-libtab="voices">🗣 Voices</button>
+          <button class="lib-tab" data-libtab="characters">
+            🎭 Characters
+          </button>
+        </div>
+
+        <!-- Media pane -->
+        <div class="lib-pane" data-libpane="media">
+          <div id="mediaGrid" class="media-grid"></div>
+          <div id="libraryEmpty" class="ws-empty hidden">
+            <div class="ws-empty-icon">🎞</div>
+            <h3>No media yet</h3>
+            <p>Generate your first video in this project.</p>
+            <button class="btn btn-primary" id="newGenerationEmpty">
+              ＋ New generation
+            </button>
+          </div>
+        </div>
+
+        <!-- Voices pane (standalone generated speech clips) -->
+        <div class="lib-pane hidden" data-libpane="voices">
+          <div id="voiceGrid" class="media-grid"></div>
+          <div id="voicesEmpty" class="ws-empty hidden">
+            <div class="ws-empty-icon">🗣</div>
+            <h3>No voices yet</h3>
+            <p>
+              Generated speech clips land here. In a shot, use the timeline's ＋
+              Audio ▸ Clone a voice to make one.
+            </p>
+          </div>
+        </div>
+
+        <!-- Characters pane -->
+        <div class="lib-pane hidden" data-libpane="characters">
+          <div id="characterGrid" class="character-grid"></div>
+          <div id="charactersEmpty" class="ws-empty hidden">
+            <div class="ws-empty-icon">🎭</div>
+            <h3>No characters yet</h3>
+            <p>
+              Create a character to generate its voice — the app makes a short
+              clip of it speaking in each mood, then reuses those as reference
+              voices on your timeline.
+            </p>
+            <button class="btn btn-primary" id="newCharacterEmpty">
+              ＋ New character
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <main class="stage screen screen-studio" id="screenStudio">
       <!-- ============ PHASE 1 — COMPOSE ============ -->
       <section id="phaseSetup" class="phase phase-setup">
         <div class="compose">
-          <!-- Top action row — Generate sits above the preview, top-right -->
+          <!-- Top action row — Generate sits top-right -->
           <div class="compose-top">
-            <h3 class="section-title">Preview</h3>
+            <div class="compose-title">
+              <span class="ct-eyebrow">Director console</span>
+              <h3 class="section-title">Compose your shot</h3>
+            </div>
             <button id="generate" class="btn btn-primary btn-lg" disabled>
               Generate video →
             </button>
           </div>
 
-          <!-- Composition preview (plays back the timeline you've built — NOT
-               the live per-step generation preview, which appears in phase 2) -->
-          <div class="panel preview-panel">
-            <div class="cprev-stage" id="cprevStage">
-              <div id="cprevEmpty" class="cprev-empty">
-                Press&nbsp;▶ to preview the timeline you've composed.
-              </div>
-              <img
-                id="cprevImg"
-                class="cprev-media hidden"
-                alt="composition preview"
-              />
-              <video
-                id="cprevVideo"
-                class="cprev-media hidden"
-                muted
-                playsinline
-              ></video>
-              <div id="cprevText" class="cprev-text hidden"></div>
-            </div>
-            <div class="cprev-controls">
-              <button
-                id="cprevPlay"
-                class="cprev-play"
-                title="Play / pause preview"
-                aria-label="Play preview"
-              >
-                ▶
-              </button>
-              <div class="cprev-scrub" id="cprevScrub">
-                <div class="cprev-scrub-fill" id="cprevScrubFill"></div>
-              </div>
-              <span id="cprevTime" class="cprev-time">0.0s / 0.0s</span>
-            </div>
-          </div>
-
-          <!-- Basic settings, directly under the preview -->
-          <div class="panel settings-strip">
-            <div class="key-settings">
-              <label class="field">
-                <span>Resolution</span>
-                <select id="resolution"></select>
-              </label>
-              <label class="field">
-                <span>Aspect ratio</span>
-                <select id="aspect">
-                  <option value="landscape">Landscape 16:9</option>
-                  <option value="portrait">Portrait 9:16</option>
-                  <option value="square">Square 1:1</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>Frame rate</span>
-                <div class="unit-input">
-                  <input
-                    id="fps"
-                    type="number"
-                    min="8"
-                    max="60"
-                    step="1"
-                    value="24"
-                  />
-                  <span class="unit">fps</span>
+          <div class="compose-main">
+            <!-- LEFT: monitor-feed preview (top) + timeline (bottom) -->
+            <div class="compose-left">
+              <div class="panel preview-panel">
+                <div class="monitor-head">
+                  <span class="mon-live"
+                    ><span class="mon-dot"></span> Monitor Feed</span
+                  >
+                  <span class="mon-tag">◈ Composition Preview</span>
                 </div>
-              </label>
-              <label class="field">
-                <span>Duration</span>
-                <div class="unit-input">
-                  <input
-                    id="duration"
-                    type="number"
-                    min="1"
-                    max="60"
-                    step="1"
-                    value="5"
+                <div class="cprev-stage" id="cprevStage">
+                  <div id="cprevEmpty" class="cprev-empty">
+                    Press&nbsp;▶ to preview the timeline you've composed.
+                  </div>
+                  <img
+                    id="cprevImg"
+                    class="cprev-media hidden"
+                    alt="composition preview"
                   />
-                  <span class="unit">sec</span>
+                  <video
+                    id="cprevVideo"
+                    class="cprev-media hidden"
+                    muted
+                    playsinline
+                  ></video>
+                  <div id="cprevText" class="cprev-text hidden"></div>
                 </div>
-              </label>
-            </div>
-          </div>
-
-          <!-- The timeline -->
-          <div class="panel timeline-panel">
-            <div class="timeline-head">
-              <h3>Timeline</h3>
-              <div class="timeline-info">
-                <span id="tlTotal">0 frames</span> ·
-                <span id="tlDur">0.0s</span>
-              </div>
-              <div class="timeline-actions">
-                <button class="btn btn-sm" id="addText">+ Text</button>
-                <button class="btn btn-sm" id="addImage">+ Image</button>
-                <button class="btn btn-sm" id="addAudio">+ Audio</button>
-                <button class="btn btn-sm" id="addVideo">+ Video</button>
-                <button class="btn btn-sm btn-ghost" id="openAdvanced">
-                  ⚙ Advanced
-                </button>
-              </div>
-            </div>
-
-            <div id="tl" class="tl">
-              <div class="tl-ruler" id="tlRuler"></div>
-              <div class="tl-track" data-track="main">
-                <span class="tl-track-tag">VIDEO</span>
-                <div class="tl-lane" id="laneMain"></div>
-              </div>
-              <div class="tl-track motion" data-track="motion">
-                <span class="tl-track-tag">MOTION VIDEO</span>
-                <div class="tl-lane" id="laneMotion"></div>
-              </div>
-              <div class="tl-track audio" data-track="audio">
-                <span class="tl-track-tag">AUDIO</span>
-                <div class="tl-lane" id="laneAudio"></div>
-              </div>
-              <!-- Playhead: the draggable position indicator -->
-              <div class="tl-playhead" id="tlPlayhead">
-                <div class="tl-playhead-grip" id="tlPlayheadGrip"></div>
-              </div>
-            </div>
-            <p class="hint">
-              Click a shot to edit its prompt, drag to reorder, drag the right
-              edge to change length. Audio/Motion clips drag <b>anywhere</b> and
-              resize from either edge. Drag the ruler or the vertical
-              <b>playhead</b> to scrub the preview above.
-            </p>
-          </div>
-
-          <!-- Below the timeline: feature toggles + prompt entry areas -->
-          <div class="panel below-tl">
-            <div class="toggles feature-toggles">
-              <label class="chk2"
-                ><input id="lipSync" type="checkbox" /> 🎤 Lip-sync video to
-                voice track</label
-              >
-              <label class="chk2"
-                ><input id="bgMusicRemoval" type="checkbox" /> 🎚 Remove
-                background music</label
-              >
-              <label class="chk2"
-                ><input id="overrideAudio" type="checkbox" /> Use loaded video's
-                own audio</label
-              >
-            </div>
-
-            <label class="field">
-              <span
-                >Global prompt <small>(overall scene &amp; style)</small></span
-              >
-              <textarea
-                id="globalPrompt"
-                rows="2"
-                placeholder="Cinematic street photography, a young woman walking down a cobblestone street at golden hour…"
-              ></textarea>
-            </label>
-
-            <!-- Selected main-track shot editor -->
-            <div id="segEditor" class="seg-editor hidden">
-              <div class="seg-editor-head">
-                <strong id="segEditorTitle">Shot</strong>
-                <button class="btn btn-sm btn-ghost" id="segClose">✕</button>
-              </div>
-              <label class="field">
-                <span>Shot prompt</span>
-                <textarea
-                  id="segPrompt"
-                  rows="3"
-                  placeholder="Describe this shot — camera, subject, action, lighting…"
-                ></textarea>
-              </label>
-              <div class="seg-editor-row">
-                <div id="segImageWrap" class="seg-image hidden">
-                  <img id="segImage" alt="reference" />
-                  <button class="btn btn-sm btn-ghost" id="segReplaceImg">
-                    Replace image
+                <div class="cprev-controls">
+                  <button
+                    id="cprevPlay"
+                    class="cprev-play"
+                    title="Play / pause preview"
+                    aria-label="Play preview"
+                  >
+                    ▶
                   </button>
+                  <div class="cprev-scrub" id="cprevScrub">
+                    <div class="cprev-scrub-fill" id="cprevScrubFill"></div>
+                  </div>
+                  <span id="cprevTime" class="cprev-time">0.0s / 0.0s</span>
                 </div>
-                <span class="seg-len"
-                  >Length: <b id="segLen">0</b> frames (<span id="segSecs"
-                    >0.0</span
-                  >s)</span
-                >
-                <button class="btn btn-sm btn-danger" id="segDelete">
-                  Delete shot
-                </button>
+              </div>
+
+              <div class="panel timeline-panel">
+                <div class="timeline-head">
+                  <div class="card-label">
+                    <span class="ci">◫</span> Timeline editor
+                  </div>
+                  <div class="timeline-info">
+                    <span id="tlTotal">0 frames</span> ·
+                    <span id="tlDur">0.0s</span>
+                  </div>
+                  <div class="timeline-actions">
+                    <button class="btn btn-sm" id="addText">+ Text</button>
+                    <button class="btn btn-sm" id="addImage">+ Image</button>
+                    <button
+                      class="btn btn-sm"
+                      id="addVideo"
+                      title="Add a video to the main track (for extending a video)"
+                    >
+                      + Video
+                    </button>
+                    <button
+                      class="btn btn-sm"
+                      id="addMotion"
+                      title="Add a video to the IC-LoRA track (camera / video-to-video guidance)"
+                    >
+                      + IC-LoRA
+                    </button>
+                    <button class="btn btn-sm" id="addAudio">+ Audio</button>
+                    <button class="btn btn-sm btn-ghost" id="openAdvanced">
+                      ⚙ Advanced
+                    </button>
+                  </div>
+                </div>
+
+                <div id="tl" class="tl">
+                  <div class="tl-ruler" id="tlRuler"></div>
+                  <div class="tl-track" data-track="main">
+                    <span class="tl-track-tag"
+                      ><b>Video</b><i>Shots &amp; text</i></span
+                    >
+                    <div class="tl-lane" id="laneMain"></div>
+                  </div>
+                  <div class="tl-track motion" data-track="motion">
+                    <span class="tl-track-tag"
+                      ><b>IC-LoRA Video</b><i>Camera / video guidance</i></span
+                    >
+                    <div class="tl-lane" id="laneMotion"></div>
+                  </div>
+                  <div class="tl-track audio" data-track="audio">
+                    <span class="tl-track-tag"
+                      ><b>Audio</b><i>Score &amp; voice</i></span
+                    >
+                    <div class="tl-lane" id="laneAudio"></div>
+                  </div>
+                  <!-- Playhead: the draggable position indicator -->
+                  <div class="tl-playhead" id="tlPlayhead">
+                    <div class="tl-playhead-grip" id="tlPlayheadGrip"></div>
+                  </div>
+                </div>
+                <p class="hint">
+                  Click a shot to edit it in the side panel. Drag to reorder,
+                  drag the right edge to change length. Audio/Motion clips drag
+                  <b>anywhere</b> and resize from either edge. Drag the ruler or
+                  the vertical <b>playhead</b> to scrub the preview above.
+                </p>
               </div>
             </div>
 
-            <!-- Selected audio/video clip editor -->
-            <div id="clipEditor" class="seg-editor hidden">
-              <div class="seg-editor-head">
-                <strong id="clipEditorTitle">Clip</strong>
-                <button class="btn btn-sm btn-ghost" id="clipClose">✕</button>
+            <!-- RIGHT: single panel — swaps between global settings and the
+                 editor for whichever timeline segment/clip is selected. -->
+            <aside class="panel side-panel">
+              <!-- Global settings view (default) -->
+              <div id="globalView" class="side-view">
+                <div class="side-card-block">
+                  <div class="card-label">
+                    <span class="ci">✎</span> Global cinematic prompt
+                  </div>
+                  <textarea
+                    id="globalPrompt"
+                    rows="5"
+                    placeholder="Cinematic street photography, a young woman walking down a cobblestone street at golden hour…"
+                  ></textarea>
+                </div>
+
+                <div class="side-card-block">
+                  <div class="card-label">
+                    <span class="ci">▦</span> Studio render specs
+                  </div>
+                  <div class="key-settings">
+                    <label class="field">
+                      <span>Resolution</span>
+                      <select id="resolution"></select>
+                    </label>
+                    <label class="field">
+                      <span>Aspect ratio</span>
+                      <select id="aspect">
+                        <option value="landscape">Landscape 16:9</option>
+                        <option value="portrait">Portrait 9:16</option>
+                        <option value="square">Square 1:1</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>Frame rate</span>
+                      <div class="unit-input">
+                        <input
+                          id="fps"
+                          type="number"
+                          min="8"
+                          max="60"
+                          step="1"
+                          value="24"
+                        />
+                        <span class="unit">fps</span>
+                      </div>
+                    </label>
+                    <label class="field">
+                      <span>Duration</span>
+                      <div class="unit-input">
+                        <input
+                          id="duration"
+                          type="number"
+                          min="1"
+                          max="60"
+                          step="1"
+                          value="5"
+                        />
+                        <span class="unit">sec</span>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="side-card-block">
+                  <div class="card-label">
+                    <span class="ci">◉</span> Audio &amp; sync
+                  </div>
+                  <div class="toggles feature-toggles">
+                    <label class="chk2"
+                      ><input id="lipSync" type="checkbox" /> 🎤 Lip-sync video
+                      to voice track</label
+                    >
+                    <label class="chk2"
+                      ><input id="bgMusicRemoval" type="checkbox" /> 🎚 Remove
+                      background music</label
+                    >
+                    <label class="chk2"
+                      ><input id="overrideAudio" type="checkbox" /> Use loaded
+                      video's own audio</label
+                    >
+                  </div>
+                </div>
               </div>
-              <div class="seg-media" id="clipMediaWrap"></div>
-              <div class="seg-editor-row">
-                <span class="seg-len"
-                  >Start <b id="clipStart">0</b>f · Length
-                  <b id="clipLen">0</b>f (<span id="clipSecs">0.0</span>s)</span
-                >
-                <label class="chk2" id="clipVoiceWrap"
-                  ><input id="clipVoice" type="checkbox" /> Voice track (for
-                  lip-sync)</label
-                >
-                <button class="btn btn-sm btn-danger" id="clipDelete">
-                  Delete clip
+
+              <!-- Selected main-track shot editor -->
+              <div id="segEditor" class="side-view hidden">
+                <button class="side-back" id="segClose">
+                  ← Back to settings
                 </button>
+                <div class="side-card-block">
+                  <div class="card-label">
+                    <span class="ci">◧</span
+                    ><span id="segEditorTitle">Shot</span>
+                  </div>
+                  <label class="field">
+                    <span>Shot prompt</span>
+                    <textarea
+                      id="segPrompt"
+                      rows="4"
+                      placeholder="Describe this shot — camera, subject, action, lighting…"
+                    ></textarea>
+                  </label>
+                  <div id="segImageWrap" class="seg-image hidden">
+                    <img id="segImage" alt="reference" />
+                    <button class="btn btn-sm btn-ghost" id="segReplaceImg">
+                      Replace image
+                    </button>
+                  </div>
+                  <span class="seg-len"
+                    >Length: <b id="segLen">0</b> frames (<span id="segSecs"
+                      >0.0</span
+                    >s)</span
+                  >
+                  <p class="hint">
+                    Use the 🗑 icon on the selected segment to delete it.
+                  </p>
+                </div>
               </div>
-            </div>
+
+              <!-- Selected audio/video clip editor -->
+              <div id="clipEditor" class="side-view hidden">
+                <button class="side-back" id="clipClose">
+                  ← Back to settings
+                </button>
+                <div class="side-card-block">
+                  <div class="card-label">
+                    <span class="ci">◧</span
+                    ><span id="clipEditorTitle">Clip</span>
+                  </div>
+                  <div class="seg-media" id="clipMediaWrap"></div>
+                  <span class="seg-len"
+                    >Start <b id="clipStart">0</b>f · Length
+                    <b id="clipLen">0</b>f (<span id="clipSecs">0.0</span
+                    >s)</span
+                  >
+                  <label class="chk2" id="clipVoiceWrap"
+                    ><input id="clipVoice" type="checkbox" /> Voice track (for
+                    lip-sync)</label
+                  >
+                  <p class="hint">
+                    Use the 🗑 icon on the selected clip to delete it.
+                  </p>
+                </div>
+              </div>
+            </aside>
           </div>
         </div>
       </section>
@@ -310,6 +485,9 @@
             <button id="editAgain" class="btn btn-ghost">
               ← Back to editor
             </button>
+            <button id="backToLibrary" class="btn btn-ghost hidden">
+              ▤ Project library
+            </button>
             <button id="newVideo" class="btn btn-primary">＋ New video</button>
           </div>
         </div>
@@ -323,64 +501,72 @@
           <h2>Advanced settings</h2>
           <button id="closeAdvanced" class="btn btn-ghost">✕</button>
         </div>
-        <div class="settings-grid">
-          <label class="field"
-            ><span>Stage&nbsp;1 steps</span
-            ><input id="stage1Steps" type="number" min="1" max="60" value="20"
-          /></label>
-          <label class="field"
-            ><span>Stage&nbsp;2 steps <small>(upscale)</small></span
-            ><input id="stage2Steps" type="number" min="1" max="30" value="4"
-          /></label>
-          <label class="field"
-            ><span>CFG</span
-            ><input
-              id="cfg"
-              type="number"
-              min="1"
-              max="12"
-              step="0.1"
-              value="1"
-          /></label>
-          <label class="field">
-            <span>Seed</span>
-            <div class="seed-row">
-              <input id="seed" type="number" min="0" value="0" />
-              <label class="chk"
-                ><input id="seedRandom" type="checkbox" checked /> random</label
-              >
-            </div>
-          </label>
-          <label class="field"
-            ><span>Divisible by</span
-            ><input id="divisibleBy" type="number" value="32"
-          /></label>
-          <label class="field"
-            ><span>Image compression</span
-            ><input id="imgCompression" type="number" value="18"
-          /></label>
-          <label class="field"
-            ><span>Epsilon</span
-            ><input id="epsilon" type="number" step="0.001" value="0.001"
-          /></label>
-          <label class="field"
-            ><span>Guide strength</span
-            ><input id="guideStrength" type="text" value="1.00"
-          /></label>
-        </div>
-        <div class="toggles">
-          <label class="chk2"
-            ><input id="useAudio" type="checkbox" checked /> Generate
-            audio</label
-          >
-          <label class="chk2"
-            ><input id="useMotion" type="checkbox" checked /> Motion
-            guidance</label
-          >
-          <label class="chk2"
-            ><input id="inpaintAudio" type="checkbox" checked /> Inpaint audio
-            gaps</label
-          >
+        <div class="modal-scroll">
+          <div class="settings-grid">
+            <label class="field"
+              ><span>Stage&nbsp;1 steps</span
+              ><input
+                id="stage1Steps"
+                type="number"
+                min="1"
+                max="60"
+                value="20"
+            /></label>
+            <label class="field"
+              ><span>Stage&nbsp;2 steps <small>(upscale)</small></span
+              ><input id="stage2Steps" type="number" min="1" max="30" value="4"
+            /></label>
+            <label class="field"
+              ><span>CFG</span
+              ><input
+                id="cfg"
+                type="number"
+                min="1"
+                max="12"
+                step="0.1"
+                value="1"
+            /></label>
+            <label class="field">
+              <span>Seed</span>
+              <div class="seed-row">
+                <input id="seed" type="number" min="0" value="0" />
+                <label class="chk"
+                  ><input id="seedRandom" type="checkbox" checked />
+                  random</label
+                >
+              </div>
+            </label>
+            <label class="field"
+              ><span>Divisible by</span
+              ><input id="divisibleBy" type="number" value="32"
+            /></label>
+            <label class="field"
+              ><span>Image compression</span
+              ><input id="imgCompression" type="number" value="18"
+            /></label>
+            <label class="field"
+              ><span>Epsilon</span
+              ><input id="epsilon" type="number" step="0.001" value="0.001"
+            /></label>
+            <label class="field"
+              ><span>Guide strength</span
+              ><input id="guideStrength" type="text" value="1.00"
+            /></label>
+          </div>
+          <div class="toggles">
+            <label class="chk2"
+              ><input id="useAudio" type="checkbox" checked /> Generate
+              audio</label
+            >
+            <label class="chk2"
+              ><input id="useMotion" type="checkbox" checked /> Motion
+              guidance</label
+            >
+            <label class="chk2"
+              ><input id="inpaintAudio" type="checkbox" checked /> Inpaint audio
+              gaps</label
+            >
+          </div>
         </div>
       </div>
     </div>
@@ -392,37 +578,136 @@
           <h2>Models</h2>
           <button id="closeModels" class="btn btn-ghost">✕</button>
         </div>
-        <p class="hint">
-          Download required models, or point at files you already have (e.g. on
-          an external drive). Edit <code>config/models_manifest.json</code> to
-          change URLs/versions.
-        </p>
-        <div id="modelList" class="model-list"></div>
-
-        <!-- Optional voice / TTS engine (isolated install) -->
-        <div class="voice-engine" id="voiceEngine">
-          <h3>
-            Voice engine <small>(text-to-speech &amp; voice cloning)</small>
-          </h3>
+        <div class="modal-scroll">
           <p class="hint">
-            Optional. Installs <b>CosyVoice&nbsp;3</b> in its own isolated
-            environment so it can't affect video generation. First install
-            downloads ~2–4&nbsp;GB. Only clone voices you have the right to use.
+            Download required models, or point at files you already have (e.g.
+            on an external drive).
           </p>
-          <div class="ve-row">
-            <label class="field ve-dir"
-              ><span>Install location</span
-              ><input id="ttsInstallDir" type="text" placeholder="tts_engine"
-            /></label>
-            <button class="btn ve-install-btn" id="ttsInstallBtn">
-              <span class="ve-bar" id="ttsInstallBar"></span>
-              <span class="ve-btn-label" id="ttsInstallLabel"
-                >Install voice engine</span
-              >
-            </button>
+          <div id="modelList" class="model-list"></div>
+
+          <!-- Optional voice / TTS engine (isolated install) -->
+          <div class="voice-engine" id="voiceEngine">
+            <h3>
+              Voice engine <small>(text-to-speech &amp; voice cloning)</small>
+            </h3>
+            <p class="hint">
+              Optional. Installs <b>CosyVoice&nbsp;3</b> in its own isolated
+              environment. Only clone voices you have the right to use.
+            </p>
+            <div class="ve-row">
+              <label class="field ve-dir"
+                ><span>Install location</span
+                ><input id="ttsInstallDir" type="text" placeholder="tts_engine"
+              /></label>
+              <button class="btn ve-install-btn" id="ttsInstallBtn">
+                <span class="ve-bar" id="ttsInstallBar"></span>
+                <span class="ve-btn-label" id="ttsInstallLabel"
+                  >Install voice engine</span
+                >
+              </button>
+            </div>
+            <div class="ve-status" id="ttsEngineStatus">Checking…</div>
+            <div id="ttsSetupLog" class="ve-log hidden"></div>
           </div>
-          <div class="ve-status" id="ttsEngineStatus">Checking…</div>
-          <div id="ttsSetupLog" class="ve-log hidden"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- New-character modal -->
+    <div id="characterModal" class="modal">
+      <div class="modal-box modal-box-sm">
+        <div class="modal-head">
+          <h2>New character</h2>
+          <button id="closeCharacter" class="btn btn-ghost">✕</button>
+        </div>
+        <div class="modal-scroll">
+          <div class="char-form">
+            <label class="tts-field">
+              <span class="tts-field-label">Name</span>
+              <input id="charName" type="text" placeholder="e.g. Maya" />
+            </label>
+            <div class="tts-field">
+              <span class="tts-field-label"
+                >Description
+                <small>(appearance, age, voice, personality)</small></span
+              >
+              <div class="ta-shell">
+                <textarea
+                  id="charDesc"
+                  rows="4"
+                  placeholder="e.g. A woman in her 30s with a warm, slightly raspy voice, short curly brown hair, cheerful and energetic."
+                ></textarea>
+              </div>
+            </div>
+            <p class="hint">
+              The app generates a short low-res clip of this character speaking
+              in each mood (Neutral, Happy, Sad, Angry, Excited), then extracts
+              a reference voice per mood. This takes a little while.
+            </p>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <span id="charStatus" class="tts-status"></span>
+          <button class="btn btn-primary" id="charGenerate">
+            Generate character
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Mood-clip crop editor: adjust each mood's region on the full reference audio -->
+    <div id="cropModal" class="modal">
+      <div class="modal-box modal-box-lg">
+        <div class="modal-head">
+          <h2>Adjust mood clips — <span id="cropCharName"></span></h2>
+          <button id="closeCrop" class="btn btn-ghost">✕</button>
+        </div>
+        <div class="modal-scroll">
+          <p class="hint">
+            Drag each mood's handles on the waveform to re-crop it from the full
+            reference audio. Saving re-transcribes the trimmed clip for accurate
+            voice cloning.
+          </p>
+          <div class="crop-wave-wrap" id="cropWaveWrap">
+            <canvas id="cropWave" class="crop-wave"></canvas>
+            <div id="cropRegions" class="crop-regions"></div>
+            <div id="cropPlayhead" class="crop-playhead hidden"></div>
+            <div id="cropWaveLoading" class="crop-wave-loading">
+              Loading audio…
+            </div>
+          </div>
+          <div id="cropList" class="crop-list"></div>
+          <audio id="cropAudio" class="hidden"></audio>
+        </div>
+        <div class="modal-foot">
+          <span id="cropStatus" class="tts-status"></span>
+          <button class="btn btn-primary" id="cropSave" disabled>
+            Save changes
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Server-side folder browser (used when the runtime is headless, e.g. RunPod) -->
+    <div id="folderModal" class="modal">
+      <div class="modal-box modal-box-sm">
+        <div class="modal-head">
+          <h2 id="folderTitle">Select a folder</h2>
+          <button id="closeFolder" class="btn btn-ghost">✕</button>
+        </div>
+        <div class="modal-scroll">
+          <div id="fsPath" class="fs-path"></div>
+          <div id="fsList" class="fs-list"></div>
+          <div id="fsEmpty" class="fs-empty hidden">No sub-folders here.</div>
+          <div class="fs-newrow">
+            <input id="fsNewName" type="text" placeholder="New folder name" />
+            <button class="btn btn-sm" id="fsMkdir">+ Create folder</button>
+          </div>
+          <div id="fsStatus" class="fs-status"></div>
+        </div>
+        <div class="modal-foot">
+          <span class="fs-hint">Selected: <span id="fsSelected"></span></span>
+          <button class="btn btn-primary" id="fsUse">Use this folder</button>
         </div>
       </div>
     </div>
@@ -437,161 +722,249 @@
         <div class="tabs" id="audioTabs">
           <button class="tab active" data-tab="upload">⬆ Upload audio</button>
           <button class="tab" data-tab="speak">🗣 Clone a voice</button>
-          <button class="tab" data-tab="tts">📝 Text to audio</button>
         </div>
 
-        <!-- Upload tab -->
-        <div class="tab-pane" data-pane="upload">
-          <p class="hint">Add a music or voice file from your computer.</p>
-          <button class="btn btn-primary" id="audioUploadBtn">
-            Choose audio file…
-          </button>
-        </div>
-
-        <!-- Speech tab (shared by "Clone a voice" and "Text to audio"; JS toggles the mode) -->
-        <div class="tab-pane hidden" data-pane="speak">
-          <div id="ttsUnavailable" class="tts-note hidden">
-            The voice engine isn't installed yet.
-            <button class="btn btn-sm" id="ttsGotoInstall">
-              Install voice engine
+        <div class="modal-scroll">
+          <!-- Upload tab -->
+          <div class="tab-pane" data-pane="upload">
+            <p class="hint">Add a music or voice file from your computer.</p>
+            <button class="btn btn-primary" id="audioUploadBtn">
+              Choose audio file…
             </button>
           </div>
-          <div id="ttsForm" class="tts-grid">
-            <!-- LEFT: what to say + how -->
-            <div class="tts-left">
-              <!-- Reference voice (Clone tab only) -->
-              <div class="tts-ref-block" id="ttsRefBlock">
-                <span class="tts-field-label">Reference voice</span>
-                <div class="tts-ref-row">
-                  <button class="btn btn-sm" id="ttsRefBtn">
-                    Choose reference clip…
-                  </button>
-                  <span id="ttsRefName" class="tts-ref-name"
-                    >No reference selected</span
-                  >
-                </div>
-                <!-- The clip's transcript. The model clones the voice USING this text, so it must
+
+          <!-- Speech tab — clone a voice from a project character's mood clip, or an uploaded clip. -->
+          <div class="tab-pane hidden" data-pane="speak">
+            <div id="ttsUnavailable" class="tts-note hidden">
+              The voice engine isn't installed yet.
+              <button class="btn btn-sm" id="ttsGotoInstall">
+                Install voice engine
+              </button>
+            </div>
+            <div id="ttsForm" class="tts-grid">
+              <!-- LEFT: what to say + how -->
+              <div class="tts-left">
+                <!-- Reference voice: from a character's mood clip, or an uploaded clip. -->
+                <div class="tts-ref-block" id="ttsRefBlock">
+                  <span class="tts-field-label">Reference voice</span>
+                  <div class="ref-src" id="ttsRefSource">
+                    <button
+                      type="button"
+                      class="ref-src-btn active"
+                      data-src="character"
+                    >
+                      From a character
+                    </button>
+                    <button type="button" class="ref-src-btn" data-src="upload">
+                      Upload a clip
+                    </button>
+                  </div>
+                  <!-- Character + mood picker -->
+                  <div class="tts-ref-char" id="ttsRefChar">
+                    <select id="ttsCharSelect" class="tts-ref-select">
+                      <option value="">No characters yet…</option>
+                    </select>
+                    <select id="ttsMoodSelect" class="tts-ref-select"></select>
+                  </div>
+                  <!-- Upload picker -->
+                  <div class="tts-ref-row hidden" id="ttsRefUpload">
+                    <button class="btn btn-sm" id="ttsRefBtn">
+                      Choose reference clip…
+                    </button>
+                    <span id="ttsRefName" class="tts-ref-name"
+                      >No reference selected</span
+                    >
+                  </div>
+                  <!-- The clip's transcript. The model clones the voice USING this text, so it must
                      match what the clip actually says (and its language) or the output garbles. -->
-                <div class="tts-field tts-ref-transcript">
+                  <div class="tts-field tts-ref-transcript">
+                    <span class="tts-field-label"
+                      >What the reference says
+                      <small
+                        >(auto-filled — correct it if it's wrong)</small
+                      ></span
+                    >
+                    <div class="ta-shell">
+                      <textarea
+                        id="ttsRefText"
+                        rows="2"
+                        placeholder="Transcript of the reference clip…"
+                      ></textarea>
+                    </div>
+                  </div>
+                </div>
+
+                <label class="tts-field">
+                  <span class="tts-field-label">Language</span>
+                  <select id="ttsLang"></select>
+                </label>
+
+                <!-- Dialog, with sound chips docked inside the box -->
+                <div class="tts-field">
+                  <span class="tts-field-label">Dialog to speak</span>
+                  <div class="ta-shell">
+                    <textarea
+                      id="ttsText"
+                      rows="4"
+                      placeholder="Type what the voice should say…"
+                    ></textarea>
+                    <div class="chip-tray" id="ttsInserts">
+                      <span class="chip-tray-label">Sounds</span>
+                      <button type="button" class="chip" data-ins="[laughter]">
+                        😄 laugh
+                      </button>
+                      <button type="button" class="chip" data-ins="[sigh]">
+                        😮‍💨 sigh
+                      </button>
+                      <button type="button" class="chip" data-ins="[breath]">
+                        breath
+                      </button>
+                      <button
+                        type="button"
+                        class="chip"
+                        data-ins="[quick_breath]"
+                      >
+                        quick breath
+                      </button>
+                      <button type="button" class="chip" data-ins="[cough]">
+                        cough
+                      </button>
+                      <button type="button" class="chip" data-ins="[lipsmack]">
+                        lip-smack
+                      </button>
+                      <button
+                        type="button"
+                        class="chip"
+                        data-wrap="&lt;laughter&gt;|&lt;/laughter&gt;"
+                      >
+                        &lt;laughing…&gt;
+                      </button>
+                      <button
+                        type="button"
+                        class="chip"
+                        data-wrap="&lt;strong&gt;|&lt;/strong&gt;"
+                      >
+                        emphasis
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Tone, with mood chips docked inside the box -->
+                <div class="tts-field">
                   <span class="tts-field-label"
-                    >What the reference says
-                    <small>(auto-filled — correct it if it's wrong)</small></span
+                    >Tone / emotion <small>(optional)</small></span
                   >
                   <div class="ta-shell">
                     <textarea
-                      id="ttsRefText"
+                      id="ttsInstruct"
                       rows="2"
-                      placeholder="Transcript of the reference clip…"
+                      placeholder="e.g. warm and calm, excited, whispering"
                     ></textarea>
+                    <div class="chip-tray" id="ttsEmotions">
+                      <span class="chip-tray-label">Moods</span>
+                      <button
+                        type="button"
+                        class="chip"
+                        data-emo="Speak in a warm, calm tone."
+                      >
+                        warm
+                      </button>
+                      <button
+                        type="button"
+                        class="chip"
+                        data-emo="Speak in a cheerful, excited, happy tone."
+                      >
+                        happy
+                      </button>
+                      <button
+                        type="button"
+                        class="chip"
+                        data-emo="Speak in a sad, sorrowful, crying voice."
+                      >
+                        sad / crying
+                      </button>
+                      <button
+                        type="button"
+                        class="chip"
+                        data-emo="Speak in an angry, intense tone."
+                      >
+                        angry
+                      </button>
+                      <button
+                        type="button"
+                        class="chip"
+                        data-emo="Speak in a soft, gentle whisper."
+                      >
+                        whisper
+                      </button>
+                      <button
+                        type="button"
+                        class="chip"
+                        data-emo="Speak slowly and gently."
+                      >
+                        slow
+                      </button>
+                      <button
+                        type="button"
+                        class="chip"
+                        data-emo="Speak quickly and energetically."
+                      >
+                        fast
+                      </button>
+                    </div>
                   </div>
                 </div>
+
+                <label class="tts-field tts-speed">
+                  <span class="tts-field-label"
+                    >Speed <b id="ttsSpeedVal">1.0</b>×</span
+                  >
+                  <input
+                    id="ttsSpeed"
+                    type="range"
+                    min="0.5"
+                    max="2"
+                    step="0.1"
+                    value="1"
+                  />
+                </label>
+
+                <div class="tts-generate-row">
+                  <button class="btn btn-primary" id="ttsGenerate">
+                    Generate speech
+                  </button>
+                  <span id="ttsStatus" class="tts-status"></span>
+                </div>
               </div>
-              <!-- Built-in voice note (Text-to-audio tab only) -->
-              <p class="tts-plain-note hidden" id="ttsPlainNote">
-                Uses the voice engine's built-in narrator voice — no reference
-                clip needed.
-              </p>
 
-              <label class="tts-field">
-                <span class="tts-field-label">Language</span>
-                <select id="ttsLang"></select>
-              </label>
-
-              <!-- Dialog, with sound chips docked inside the box -->
-              <div class="tts-field">
-                <span class="tts-field-label">Dialog to speak</span>
-                <div class="ta-shell">
-                  <textarea
-                    id="ttsText"
-                    rows="4"
-                    placeholder="Type what the voice should say…"
-                  ></textarea>
-                  <div class="chip-tray" id="ttsInserts">
-                    <span class="chip-tray-label">Sounds</span>
-                    <button type="button" class="chip" data-ins="[laughter]">😄 laugh</button>
-                    <button type="button" class="chip" data-ins="[sigh]">😮‍💨 sigh</button>
-                    <button type="button" class="chip" data-ins="[breath]">breath</button>
-                    <button type="button" class="chip" data-ins="[quick_breath]">quick breath</button>
-                    <button type="button" class="chip" data-ins="[cough]">cough</button>
-                    <button type="button" class="chip" data-ins="[lipsmack]">lip-smack</button>
-                    <button type="button" class="chip" data-wrap="&lt;laughter&gt;|&lt;/laughter&gt;">&lt;laughing…&gt;</button>
-                    <button type="button" class="chip" data-wrap="&lt;strong&gt;|&lt;/strong&gt;">emphasis</button>
+              <!-- RIGHT: preview -->
+              <div class="tts-right">
+                <div class="tts-preview-panel">
+                  <div class="tts-preview-empty" id="ttsPreviewEmpty">
+                    <div class="tts-preview-icon">🎧</div>
+                    <p>Your generated audio will show here.</p>
+                  </div>
+                  <div class="tts-shimmer hidden" id="ttsShimmer">
+                    <div class="tts-shimmer-wave">
+                      <span></span><span></span><span></span><span></span
+                      ><span></span><span></span><span></span>
+                    </div>
+                    <p class="tts-shimmer-text">Generating speech…</p>
+                  </div>
+                  <div id="ttsResult" class="tts-preview-ready hidden">
+                    <audio id="ttsPreview" controls></audio>
+                    <span class="tts-preview-dur" id="ttsPreviewDur"></span>
                   </div>
                 </div>
-              </div>
-
-              <!-- Tone, with mood chips docked inside the box -->
-              <div class="tts-field">
-                <span class="tts-field-label"
-                  >Tone / emotion <small>(optional)</small></span
-                >
-                <div class="ta-shell">
-                  <textarea
-                    id="ttsInstruct"
-                    rows="2"
-                    placeholder="e.g. warm and calm, excited, whispering"
-                  ></textarea>
-                  <div class="chip-tray" id="ttsEmotions">
-                    <span class="chip-tray-label">Moods</span>
-                    <button type="button" class="chip" data-emo="Speak in a warm, calm tone.">warm</button>
-                    <button type="button" class="chip" data-emo="Speak in a cheerful, excited, happy tone.">happy</button>
-                    <button type="button" class="chip" data-emo="Speak in a sad, sorrowful, crying voice.">sad / crying</button>
-                    <button type="button" class="chip" data-emo="Speak in an angry, intense tone.">angry</button>
-                    <button type="button" class="chip" data-emo="Speak in a soft, gentle whisper.">whisper</button>
-                    <button type="button" class="chip" data-emo="Speak slowly and gently.">slow</button>
-                    <button type="button" class="chip" data-emo="Speak quickly and energetically.">fast</button>
-                  </div>
+                <div class="tts-right-actions">
+                  <button class="btn btn-sm hidden" id="ttsRegen">
+                    ↻ Regenerate
+                  </button>
+                  <button class="btn btn-primary" id="ttsAdd" disabled>
+                    ＋ Add to track
+                  </button>
                 </div>
-              </div>
-
-              <label class="tts-field tts-speed">
-                <span class="tts-field-label"
-                  >Speed <b id="ttsSpeedVal">1.0</b>×</span
-                >
-                <input
-                  id="ttsSpeed"
-                  type="range"
-                  min="0.5"
-                  max="2"
-                  step="0.1"
-                  value="1"
-                />
-              </label>
-
-              <div class="tts-generate-row">
-                <button class="btn btn-primary" id="ttsGenerate">
-                  Generate speech
-                </button>
-                <span id="ttsStatus" class="tts-status"></span>
-              </div>
-            </div>
-
-            <!-- RIGHT: preview -->
-            <div class="tts-right">
-              <div class="tts-preview-panel">
-                <div class="tts-preview-empty" id="ttsPreviewEmpty">
-                  <div class="tts-preview-icon">🎧</div>
-                  <p>Your generated audio will show here.</p>
-                </div>
-                <div class="tts-shimmer hidden" id="ttsShimmer">
-                  <div class="tts-shimmer-wave">
-                    <span></span><span></span><span></span><span></span
-                    ><span></span><span></span><span></span>
-                  </div>
-                  <p class="tts-shimmer-text">Generating speech…</p>
-                </div>
-                <div id="ttsResult" class="tts-preview-ready hidden">
-                  <audio id="ttsPreview" controls></audio>
-                  <span class="tts-preview-dur" id="ttsPreviewDur"></span>
-                </div>
-              </div>
-              <div class="tts-right-actions">
-                <button class="btn btn-sm hidden" id="ttsRegen">
-                  ↻ Regenerate
-                </button>
-                <button class="btn btn-primary" id="ttsAdd" disabled>
-                  ＋ Add to track
-                </button>
               </div>
             </div>
           </div>

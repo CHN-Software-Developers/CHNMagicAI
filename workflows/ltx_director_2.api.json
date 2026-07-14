@@ -330,5 +330,22 @@
       "fps": ["156", 2],
       "bit_depth": 8
     }
+  },
+  "159": {
+    "class_type": "ImageFromBatch",
+    "_meta": { "title": "Get Last Frame" },
+    "inputs": {
+      "image": ["1", 0],
+      "batch_index": -1,
+      "length": 1
+    }
+  },
+  "160": {
+    "class_type": "SaveImage",
+    "_meta": { "title": "Last Frame" },
+    "inputs": {
+      "images": ["159", 0],
+      "filename_prefix": "image/last-frame"
+    }
   }
 }

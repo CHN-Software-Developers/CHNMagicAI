@@ -1,6 +1,8 @@
-/* AIVideoBuilder frontend — 3-phase stepper flow + LTX Director 2 style timeline.
-   Main (VIDEO) track = docked shots that partition the duration. Motion (VIDEO) and AUDIO
-   tracks hold free-placement clips you can drag anywhere and resize from either edge. */
+/* CHNMagicAI frontend — projects workspace + 3-phase studio (LTX Director 2 style timeline).
+   Top-level screens (body[data-screen]): projects (landing) → library (a project's media grid)
+   → studio (the Compose/Generate/Result stepper). Inside the studio, the Main (VIDEO) track =
+   docked shots that partition the duration; Motion (VIDEO) and AUDIO tracks hold free-placement
+   clips you can drag anywhere and resize from either edge. */
 const $ = (id) => document.getElementById(id);
 const api = (p, opts) => fetch(p, opts).then((r) => r.json());
 
@@ -31,10 +33,24 @@ const state = {
   selectedClipId: null, // selected audio/video clip
   hasResult: false,
   generating: false,
+  // Projects workspace
+  screen: "projects", // projects | library | studio
+  projects: [], // registry list for the landing grid
+  currentProjectId: null, // the project a generation files into
+  currentProject: null, // its loaded manifest (media list)
+  lastMediaId: null, // media id of the just-finished generation (for last-frame upload)
+  libTab: "media", // library sub-tab: media | characters
+  characters: [], // current project's characters
 };
 
 let segId = 1;
 const newId = () => `seg_${Date.now()}_${segId++}`;
+
+// Trash glyph for the per-segment delete control (shown only when selected).
+const TRASH_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6M14 11v6"/></svg>';
+const delBtnHtml = (title) =>
+  `<button class="tl-del" data-del="1" title="${title}">${TRASH_SVG}</button>`;
 
 const curFps = () => parseFloat($("fps").value) || 24;
 
@@ -68,6 +84,13 @@ async function init() {
   renderTimeline();
   cprevRenderFrame(0);
   setPhase("setup");
+  // Land on the projects workspace; the studio is prepped above and entered per project.
+  loadProjects();
+  setScreen("projects");
+  // First thing the user sees when required models are missing is the Models installer.
+  if (state.config && state.config.all_required_present === false) {
+    openModels();
+  }
 }
 
 function mkSeg(type, prompt = "", extra = {}) {
@@ -78,6 +101,15 @@ function mkSeg(type, prompt = "", extra = {}) {
     length: 48,
     imageFile: extra.imageFile || null,
     imageB64: extra.imageB64 || null,
+    // Video segments (main track) carry the engine input filename in imageFile — the
+    // same key LTX Director reads for both image and video guides — plus a preview URL,
+    // a poster thumbnail, and a trim offset. `lockLen` keeps fitToTotal from rescaling
+    // the segment away from the real clip length.
+    videoUrl: extra.videoUrl || null,
+    poster: extra.poster || null,
+    trimStart: extra.trimStart || 0,
+    lockLen: !!extra.lockLen,
+    name: extra.name || "",
     isEndFrame: false,
   };
 }
@@ -125,6 +157,824 @@ function setPhase(p) {
   });
 }
 
+/* ------------------------------- screens (workspace) ------------------------------- */
+function setScreen(s) {
+  state.screen = s;
+  document.body.dataset.screen = s;
+  if ((s === "library" || s === "studio") && state.currentProject) {
+    $("crumbProject").textContent = state.currentProject.name || "Project";
+  }
+}
+
+async function loadProjects() {
+  const res = await api("/api/projects");
+  state.projects = (res && res.projects) || [];
+  renderProjects();
+}
+
+function renderProjects() {
+  const grid = $("projectGrid");
+  const empty = $("projectsEmpty");
+  grid.innerHTML = "";
+  if (!state.projects.length) {
+    empty.classList.remove("hidden");
+    return;
+  }
+  empty.classList.add("hidden");
+  state.projects.forEach((p) => {
+    const card = document.createElement("article");
+    card.className = "project-card" + (p.exists ? "" : " missing");
+    card.dataset.id = p.id;
+    const thumb = p.thumbnail
+      ? `<img src="/api/projects/${p.thumbnail.project}/file/${p.thumbnail.media}/lastframe" alt="" />`
+      : `<div class="pc-thumb-empty">🎬</div>`;
+    const count = p.media_count || 0;
+    card.innerHTML =
+      `<div class="pc-thumb">${thumb}</div>` +
+      `<div class="pc-body">` +
+      `<h3 class="pc-name">${escapeHtml(p.name)}</h3>` +
+      `<p class="pc-meta">${count} item${count === 1 ? "" : "s"}${
+        p.exists ? "" : " · folder missing"
+      }</p>` +
+      `<p class="pc-path" title="${escapeHtml(p.path || "")}">${escapeHtml(
+        p.path || "",
+      )}</p>` +
+      `</div>` +
+      `<button class="pc-del" data-del="1" title="Remove from list">${TRASH_SVG}</button>`;
+    card.addEventListener("click", (e) => {
+      if (e.target.closest("[data-del]")) {
+        e.stopPropagation();
+        removeProject(p.id);
+        return;
+      }
+      if (!p.exists) {
+        alert("This project folder is missing. Use “Open existing…” to relocate it.");
+        return;
+      }
+      openProject(p.id);
+    });
+    grid.appendChild(card);
+  });
+}
+
+async function pickDir(title) {
+  // On a headless runtime (RunPod) there is no native OS dialog on the server, so browse the
+  // runtime's own filesystem via an in-app modal. On desktop/repo the native picker is used.
+  if ((state.config?.environment?.folder_browser || "native") === "server") {
+    return serverPickDir(title);
+  }
+  const res = await api("/api/projects/pick-dir", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  return (res && res.path) || "";
+}
+
+/* ---- server-side folder browser (RunPod) ---- */
+const fsBrowser = { path: "", resolve: null };
+
+function serverPickDir(title) {
+  $("folderTitle").textContent = title || "Select a folder";
+  $("fsNewName").value = "";
+  $("fsStatus").textContent = "";
+  openModal("folderModal");
+  fsLoad("");
+  return new Promise((resolve) => {
+    fsBrowser.resolve = resolve;
+  });
+}
+
+async function fsLoad(path) {
+  const data = await api(`/api/fs/list?path=${encodeURIComponent(path || "")}`);
+  fsBrowser.path = data.path;
+  $("fsPath").textContent = data.path;
+  $("fsSelected").textContent = data.path;
+  const list = $("fsList");
+  list.innerHTML = "";
+  if (data.parent != null) {
+    const up = document.createElement("button");
+    up.className = "fs-item fs-up";
+    up.textContent = "⬆ ..";
+    up.addEventListener("click", () => fsLoad(data.parent));
+    list.appendChild(up);
+  }
+  (data.dirs || []).forEach((d) => {
+    const b = document.createElement("button");
+    b.className = "fs-item";
+    b.textContent = "📁 " + d.name;
+    b.addEventListener("click", () => fsLoad(d.path));
+    list.appendChild(b);
+  });
+  $("fsEmpty").classList.toggle("hidden", (data.dirs || []).length > 0 || data.parent != null);
+}
+
+async function fsMkdir() {
+  const name = $("fsNewName").value.trim();
+  if (!name) return;
+  const res = await api("/api/fs/mkdir", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: fsBrowser.path, name }),
+  });
+  if (!res.ok) {
+    $("fsStatus").textContent = res.error || "Could not create the folder.";
+    return;
+  }
+  $("fsNewName").value = "";
+  $("fsStatus").textContent = "";
+  fsLoad(res.path); // step into the newly created folder
+}
+
+function fsClose(pathOrEmpty) {
+  closeModal("folderModal");
+  const r = fsBrowser.resolve;
+  fsBrowser.resolve = null;
+  if (r) r(pathOrEmpty || "");
+}
+
+async function pickFile(title) {
+  const res = await api("/api/pick-file", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  return (res && res.path) || "";
+}
+
+// The project name defaults to the chosen folder's own name — the user picks/creates a single
+// folder in the native explorer, so there are no extra browser prompts to juggle.
+function baseName(p) {
+  const parts = (p || "").replace(/[\\/]+$/, "").split(/[\\/]/);
+  return parts[parts.length - 1] || "";
+}
+
+async function newProject() {
+  const folder = await pickDir("Choose or create an empty folder for the new project");
+  if (!folder) return; // cancelled — nothing else pops up
+  const res = await api("/api/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: baseName(folder), location: folder, asRoot: true }),
+  });
+  if (!res.ok) {
+    alert(res.error || "Could not create the project.");
+    return;
+  }
+  await loadProjects();
+  openProject(res.project.id);
+}
+
+async function openExisting() {
+  const path = await pickDir("Select an existing project folder");
+  if (!path) return; // cancelled
+  const res = await api("/api/projects/locate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok) {
+    alert(res.error || "That folder is not a CHNMagicAI project.");
+    return;
+  }
+  await loadProjects();
+  openProject(res.project.id);
+}
+
+async function removeProject(id) {
+  if (!confirm("Remove this project from the list? (Files on disk are kept.)")) return;
+  await api(`/api/projects/${id}`, { method: "DELETE" });
+  loadProjects();
+}
+
+async function openProject(id) {
+  const res = await api(`/api/projects/${id}`);
+  if (!res.ok) {
+    alert(res.error || "Could not open the project.");
+    loadProjects();
+    return;
+  }
+  state.currentProjectId = id;
+  state.currentProject = res;
+  state.libTab = "media";
+  renderLibrary();
+  setScreen("library");
+}
+
+async function refreshLibrary() {
+  if (!state.currentProjectId) return;
+  const res = await api(`/api/projects/${state.currentProjectId}`);
+  if (res.ok) {
+    state.currentProject = res;
+    renderLibrary();
+  }
+}
+
+function renderLibrary() {
+  const proj = state.currentProject;
+  if (!proj) return;
+  $("libTitle").textContent = proj.name || "Project";
+  state.characters = proj.characters || [];
+  renderMedia();
+  renderVoices();
+  renderCharacters();
+  setLibTab(state.libTab);
+}
+
+// Media tab holds ONLY compound generations (video + last frame + its audio). Standalone generated
+// speech clips (type "voice") live in their own Voices tab.
+function projectGenerations() {
+  return ((state.currentProject && state.currentProject.media) || []).filter(
+    (m) => m.type !== "voice",
+  );
+}
+function projectVoices() {
+  return ((state.currentProject && state.currentProject.media) || []).filter(
+    (m) => m.type === "voice",
+  );
+}
+
+function renderMedia() {
+  const gens = projectGenerations();
+  const grid = $("mediaGrid");
+  grid.innerHTML = "";
+  $("libraryEmpty").classList.toggle("hidden", gens.length > 0);
+  gens
+    .slice()
+    .reverse()
+    .forEach((m) => grid.appendChild(buildMediaCard(m)));
+}
+
+function renderVoices() {
+  const voices = projectVoices();
+  const grid = $("voiceGrid");
+  grid.innerHTML = "";
+  $("voicesEmpty").classList.toggle("hidden", voices.length > 0);
+  voices
+    .slice()
+    .reverse()
+    .forEach((m) => grid.appendChild(buildMediaCard(m)));
+}
+
+// Toggle the Media / Voices / Characters sub-tabs (panes + contextual "New …" button + sub-label).
+function setLibTab(name) {
+  state.libTab = name;
+  document
+    .querySelectorAll("#libTabs .lib-tab")
+    .forEach((t) => t.classList.toggle("active", t.dataset.libtab === name));
+  document
+    .querySelectorAll("#screenLibrary .lib-pane")
+    .forEach((p) => p.classList.toggle("hidden", p.dataset.libpane !== name));
+  $("newGeneration").classList.toggle("hidden", name !== "media");
+  $("newCharacter").classList.toggle("hidden", name !== "characters");
+  let n, unit;
+  if (name === "characters") {
+    n = state.characters.length;
+    unit = ["character", "characters"];
+  } else if (name === "voices") {
+    n = projectVoices().length;
+    unit = ["voice", "voices"];
+  } else {
+    n = projectGenerations().length;
+    unit = ["item", "items"];
+  }
+  $("libSub").textContent = `${n} ${n === 1 ? unit[0] : unit[1]}`;
+}
+
+function renderCharacters() {
+  const grid = $("characterGrid");
+  const chars = state.characters || [];
+  grid.innerHTML = "";
+  $("charactersEmpty").classList.toggle("hidden", chars.length > 0);
+  chars
+    .slice()
+    .reverse()
+    .forEach((c) => grid.appendChild(buildCharacterCard(c)));
+}
+
+function buildCharacterCard(c) {
+  const card = document.createElement("article");
+  card.className = "character-card" + (c.status === "generating" ? " generating" : "");
+  card.dataset.id = c.id;
+  // Each mood with a clip is a play control (previews that mood's reference voice); moods without a
+  // clip render as a dim, non-interactive chip.
+  const moodChips = (c.moods || [])
+    .map((m) =>
+      m.clip
+        ? `<button type="button" class="mood-chip play" data-clip="${m.clip}">` +
+          `<span class="mc-play-ico">▶</span>${escapeHtml(m.label || m.key)}</button>`
+        : `<span class="mood-chip empty">${escapeHtml(m.label || m.key)}</span>`,
+    )
+    .join("");
+  let statusRow = "";
+  if (c.status === "generating") {
+    statusRow =
+      `<div class="char-generating"><span class="char-spinner"></span> Generating reference video…</div>`;
+  } else if (c.status === "error") {
+    statusRow = `<div class="char-error">Generation failed. Delete and try again.</div>`;
+  }
+  const ready = (c.moods || []).filter((m) => m.clip).length;
+  card.innerHTML =
+    `<div class="char-avatar">${c.avatar ? `<img src="${c.avatar}" alt="" />` : "🎭"}</div>` +
+    `<div class="char-body">` +
+    `<h3 class="char-name">${escapeHtml(c.name || "Character")}</h3>` +
+    (c.description
+      ? `<p class="char-desc">${escapeHtml(c.description)}</p>`
+      : "") +
+    statusRow +
+    `<div class="mood-chips">${moodChips}</div>` +
+    (c.status === "ready"
+      ? `<p class="char-meta">${ready} mood voice${ready === 1 ? "" : "s"} ready — tap to preview</p>`
+      : "") +
+    (c.status === "ready" && c.fullAudio
+      ? `<div class="char-card-actions"><button type="button" class="btn btn-sm" data-edit="1">✎ Adjust clips</button></div>`
+      : "") +
+    `</div>` +
+    `<audio class="mood-audio hidden"></audio>` +
+    `<button class="pc-del" data-del="1" title="Delete character">${TRASH_SVG}</button>`;
+  const audio = card.querySelector(".mood-audio");
+  card.addEventListener("click", (e) => {
+    if (e.target.closest("[data-del]")) {
+      e.stopPropagation();
+      deleteCharacter(c.id);
+      return;
+    }
+    if (e.target.closest("[data-edit]")) {
+      e.stopPropagation();
+      openCropEditor(c.id);
+      return;
+    }
+    const play = e.target.closest(".mood-chip.play");
+    if (play) {
+      e.stopPropagation();
+      const url = play.dataset.clip;
+      const wasPlaying = audio.dataset.clip === url && !audio.paused;
+      card
+        .querySelectorAll(".mood-chip.play.playing")
+        .forEach((b) => b.classList.remove("playing"));
+      if (wasPlaying) {
+        audio.pause();
+        return;
+      }
+      audio.src = url;
+      audio.dataset.clip = url;
+      play.classList.add("playing");
+      audio.onended = () => play.classList.remove("playing");
+      audio.play().catch(() => play.classList.remove("playing"));
+    }
+  });
+  return card;
+}
+
+function openCharacterModal() {
+  $("charName").value = "";
+  $("charDesc").value = "";
+  $("charStatus").textContent = "";
+  $("charGenerate").disabled = false;
+  openModal("characterModal");
+}
+
+async function createCharacter() {
+  const name = $("charName").value.trim();
+  const description = $("charDesc").value.trim();
+  if (!description) {
+    $("charStatus").textContent = "Describe the character first.";
+    return;
+  }
+  if (!state.currentProjectId) return;
+  $("charGenerate").disabled = true;
+  $("charStatus").textContent = "Starting generation…";
+  let res = null;
+  try {
+    res = await api(`/api/projects/${state.currentProjectId}/characters`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, description }),
+    });
+  } catch {
+    res = null;
+  }
+  if (!res || !res.ok) {
+    $("charStatus").textContent = (res && res.error) || "Could not start generation.";
+    $("charGenerate").disabled = false;
+    return;
+  }
+  closeModal("characterModal");
+  await refreshLibrary();
+  setLibTab("characters");
+}
+
+async function deleteCharacter(id) {
+  if (!confirm("Delete this character and its reference clips?")) return;
+  await api(`/api/projects/${state.currentProjectId}/characters/${id}`, {
+    method: "DELETE",
+  });
+  await refreshLibrary();
+  setLibTab("characters");
+}
+
+/* ------------------- character mood-clip crop editor (full-audio regions) ------------------- */
+const crop = {
+  charId: null,
+  buffer: null, // decoded AudioBuffer of the full reference audio
+  duration: 0,
+  regions: [], // [{key,label,start,end,dirty,color}]
+  drag: null, // {idx, edge, x0, s0, e0}
+  playTimer: null,
+};
+const MOOD_COLORS = ["#38bdf8", "#4ade80", "#a78bfa", "#f472b6", "#fbbf24"];
+
+async function openCropEditor(charId) {
+  const c = (state.characters || []).find((x) => x.id === charId);
+  if (!c || !c.fullAudio) return;
+  crop.charId = charId;
+  crop.buffer = null;
+  crop.duration = 0;
+  crop.regions = (c.moods || []).map((m, i) => ({
+    key: m.key,
+    label: m.label || m.key,
+    start: m.startSec || 0,
+    end: m.endSec || 0,
+    dirty: false,
+    color: MOOD_COLORS[i % MOOD_COLORS.length],
+  }));
+  $("cropCharName").textContent = c.name || "Character";
+  $("cropStatus").textContent = "";
+  $("cropSave").disabled = true;
+  $("cropWaveLoading").classList.remove("hidden");
+  $("cropRegions").innerHTML = "";
+  $("cropList").innerHTML = "";
+  openModal("cropModal");
+  try {
+    const resp = await fetch(c.fullAudio);
+    const arr = await resp.arrayBuffer();
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    crop.buffer = await ctx.decodeAudioData(arr);
+    crop.duration = crop.buffer.duration;
+    crop.regions.forEach((r) => {
+      r.end = Math.min(r.end || crop.duration, crop.duration);
+      r.start = Math.max(0, Math.min(r.start, r.end - 0.1));
+    });
+    $("cropAudio").src = c.fullAudio;
+    $("cropWaveLoading").classList.add("hidden");
+    drawCropWave();
+    renderCropRegions();
+    renderCropList();
+  } catch {
+    $("cropWaveLoading").textContent = "Couldn't load the audio.";
+  }
+}
+
+function cropWidth() {
+  return $("cropWaveWrap").clientWidth || 800;
+}
+function secToX(sec) {
+  return crop.duration ? (sec / crop.duration) * cropWidth() : 0;
+}
+function xToSec(x) {
+  return crop.duration ? (x / cropWidth()) * crop.duration : 0;
+}
+
+function drawCropWave() {
+  const canvas = $("cropWave");
+  const W = cropWidth();
+  const H = 140;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = W + "px";
+  canvas.style.height = H + "px";
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  const data = crop.buffer.getChannelData(0);
+  const step = Math.max(1, Math.floor(data.length / W));
+  const mid = H / 2;
+  ctx.fillStyle = "rgba(91,155,255,0.5)";
+  for (let x = 0; x < W; x++) {
+    let min = 1,
+      max = -1;
+    for (let j = 0; j < step; j++) {
+      const v = data[x * step + j] || 0;
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    const y1 = mid + min * mid * 0.9;
+    const y2 = mid + max * mid * 0.9;
+    ctx.fillRect(x, y1, 1, Math.max(1, y2 - y1));
+  }
+}
+
+function renderCropRegions() {
+  const host = $("cropRegions");
+  host.innerHTML = "";
+  crop.regions.forEach((r, i) => {
+    const el = document.createElement("div");
+    el.className = "crop-region" + (r.dirty ? " dirty" : "");
+    el.style.left = secToX(r.start) + "px";
+    el.style.width = Math.max(2, secToX(r.end) - secToX(r.start)) + "px";
+    el.style.setProperty("--rc", r.color);
+    el.dataset.idx = i;
+    el.innerHTML =
+      `<span class="crop-region-label">${escapeHtml(r.label)}</span>` +
+      `<span class="crop-h crop-h-l" data-edge="start"></span>` +
+      `<span class="crop-h crop-h-r" data-edge="end"></span>`;
+    host.appendChild(el);
+  });
+}
+
+function positionRegion(idx) {
+  const el = $("cropRegions").children[idx];
+  const r = crop.regions[idx];
+  if (!el) return;
+  el.style.left = secToX(r.start) + "px";
+  el.style.width = Math.max(2, secToX(r.end) - secToX(r.start)) + "px";
+  el.classList.add("dirty");
+}
+
+function renderCropList() {
+  const host = $("cropList");
+  host.innerHTML = "";
+  crop.regions.forEach((r, i) => {
+    const row = document.createElement("div");
+    row.className = "crop-row";
+    row.innerHTML =
+      `<span class="crop-swatch" style="background:${r.color}"></span>` +
+      `<span class="crop-row-label">${escapeHtml(r.label)}</span>` +
+      `<span class="crop-row-time">${r.start.toFixed(2)}s – ${r.end.toFixed(
+        2,
+      )}s · ${(r.end - r.start).toFixed(2)}s</span>` +
+      `<button type="button" class="btn btn-sm crop-play" data-idx="${i}">▶ Preview</button>` +
+      (r.dirty ? `<span class="crop-dirty-tag">edited</span>` : "");
+    host.appendChild(row);
+  });
+}
+
+function initCropDrag() {
+  const host = $("cropRegions");
+  host.addEventListener("pointerdown", (e) => {
+    const region = e.target.closest(".crop-region");
+    if (!region) return;
+    const idx = +region.dataset.idx;
+    const edge = e.target.dataset.edge || "move";
+    const r = crop.regions[idx];
+    crop.drag = { idx, edge, x0: e.clientX, s0: r.start, e0: r.end };
+    host.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  host.addEventListener("pointermove", (e) => {
+    if (!crop.drag) return;
+    const { idx, edge, x0, s0, e0 } = crop.drag;
+    const r = crop.regions[idx];
+    const dsec = xToSec(e.clientX - x0);
+    const MIN = 0.15;
+    if (edge === "start") {
+      r.start = Math.max(0, Math.min(s0 + dsec, r.end - MIN));
+    } else if (edge === "end") {
+      r.end = Math.min(crop.duration, Math.max(e0 + dsec, r.start + MIN));
+    } else {
+      const len = e0 - s0;
+      let ns = Math.max(0, Math.min(s0 + dsec, crop.duration - len));
+      r.start = ns;
+      r.end = ns + len;
+    }
+    r.dirty = true;
+    positionRegion(idx);
+    renderCropList();
+    $("cropSave").disabled = !crop.regions.some((x) => x.dirty);
+  });
+  const endDrag = () => {
+    if (crop.drag) {
+      renderCropRegions();
+      crop.drag = null;
+    }
+  };
+  host.addEventListener("pointerup", endDrag);
+  host.addEventListener("pointercancel", endDrag);
+}
+
+function playCropRegion(idx) {
+  const r = crop.regions[idx];
+  const a = $("cropAudio");
+  stopCropPlay();
+  try {
+    a.currentTime = r.start;
+    a.play();
+    crop.playTimer = setInterval(() => {
+      if (a.currentTime >= r.end) stopCropPlay();
+    }, 30);
+  } catch {
+    /* ignore */
+  }
+}
+function stopCropPlay() {
+  const a = $("cropAudio");
+  a.pause();
+  if (crop.playTimer) {
+    clearInterval(crop.playTimer);
+    crop.playTimer = null;
+  }
+}
+
+// Slice the decoded full audio to [start,end] and encode a 16-bit PCM mono WAV blob (no deps).
+function encodeRegionWav(start, end) {
+  const buf = crop.buffer;
+  const sr = buf.sampleRate;
+  const s0 = Math.max(0, Math.floor(start * sr));
+  const s1 = Math.min(buf.length, Math.floor(end * sr));
+  const n = Math.max(1, s1 - s0);
+  const ch = buf.numberOfChannels;
+  const out = new Float32Array(n);
+  for (let c = 0; c < ch; c++) {
+    const d = buf.getChannelData(c);
+    for (let i = 0; i < n; i++) out[i] += (d[s0 + i] || 0) / ch;
+  }
+  const dataSize = n * 2;
+  const ab = new ArrayBuffer(44 + dataSize);
+  const dv = new DataView(ab);
+  const wr = (off, str) => {
+    for (let i = 0; i < str.length; i++) dv.setUint8(off + i, str.charCodeAt(i));
+  };
+  wr(0, "RIFF");
+  dv.setUint32(4, 36 + dataSize, true);
+  wr(8, "WAVE");
+  wr(12, "fmt ");
+  dv.setUint32(16, 16, true);
+  dv.setUint16(20, 1, true);
+  dv.setUint16(22, 1, true);
+  dv.setUint32(24, sr, true);
+  dv.setUint32(28, sr * 2, true);
+  dv.setUint16(32, 2, true);
+  dv.setUint16(34, 16, true);
+  wr(36, "data");
+  dv.setUint32(40, dataSize, true);
+  let off = 44;
+  for (let i = 0; i < n; i++) {
+    const v = Math.max(-1, Math.min(1, out[i]));
+    dv.setInt16(off, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+    off += 2;
+  }
+  return new Blob([ab], { type: "audio/wav" });
+}
+
+async function saveCropChanges() {
+  const dirty = crop.regions.filter((r) => r.dirty);
+  if (!dirty.length || !crop.buffer) return;
+  stopCropPlay();
+  $("cropSave").disabled = true;
+  $("cropStatus").textContent = `Saving ${dirty.length} clip${
+    dirty.length === 1 ? "" : "s"
+  } (re-transcribing)…`;
+  let failed = 0;
+  for (const r of dirty) {
+    try {
+      const blob = encodeRegionWav(r.start, r.end);
+      const fd = new FormData();
+      fd.append("file", blob, `${r.key}.wav`);
+      fd.append("start", String(r.start));
+      fd.append("end", String(r.end));
+      const resp = await fetch(
+        `/api/projects/${state.currentProjectId}/characters/${crop.charId}/moods/${r.key}/clip`,
+        { method: "POST", body: fd },
+      );
+      const data = await resp.json();
+      if (data && data.ok) r.dirty = false;
+      else failed++;
+    } catch {
+      failed++;
+    }
+  }
+  $("cropStatus").textContent = failed
+    ? `Saved with ${failed} error${failed === 1 ? "" : "s"}.`
+    : "Saved.";
+  renderCropList();
+  $("cropSave").disabled = !crop.regions.some((r) => r.dirty);
+  await refreshLibrary();
+  setLibTab("characters");
+}
+
+function closeCropEditor() {
+  stopCropPlay();
+  closeModal("cropModal");
+}
+
+function buildMediaCard(m) {
+  const card = document.createElement("article");
+  card.className = "media-card";
+  card.dataset.id = m.id;
+  card.dataset.type = m.type;
+  const when = (m.created || "").replace("T", " ").replace(/(\+.*|Z)$/, "");
+  const promptTxt = (m.meta && m.meta.prompt) || "";
+
+  if (m.type === "voice") {
+    card.classList.add("voice-card");
+    card.innerHTML =
+      `<div class="mc-voicehead"><span class="mc-badge">🗣 Voice</span></div>` +
+      `<div class="mc-audio">${
+        m.audio ? `<audio controls preload="none" src="${m.audio}"></audio>` : ""
+      }</div>` +
+      `<div class="mc-foot">` +
+      `<span class="mc-when">${escapeHtml(when)}</span>` +
+      `<div class="mc-actions">` +
+      (m.audio ? `<a class="mc-act" download href="${m.audio}" title="Download audio">⬇ Audio</a>` : "") +
+      `<button class="mc-act mc-del" data-act="delete" title="Delete">${TRASH_SVG}</button>` +
+      `</div></div>` +
+      (promptTxt ? `<p class="mc-prompt">${escapeHtml(promptTxt)}</p>` : "");
+    wireMediaCard(card, m);
+    return card;
+  }
+
+  const frameImg = m.lastFrame
+    ? `<img class="mc-frame hidden" data-pane="frame" src="${m.lastFrame}" alt="last frame" />`
+    : `<div class="mc-frame mc-frame-empty hidden" data-pane="frame">No last frame yet</div>`;
+  card.innerHTML =
+    `<div class="mc-media">` +
+    `<div class="mc-tabs">` +
+    `<button class="mc-tab active" data-mtab="video" type="button">▶ Video</button>` +
+    `<button class="mc-tab" data-mtab="frame" type="button">🖼 Last frame</button>` +
+    `</div>` +
+    `<div class="mc-stage">` +
+    (m.video
+      ? `<video class="mc-video" data-pane="video" controls preload="metadata" ${
+          m.lastFrame ? `poster="${m.lastFrame}"` : ""
+        } src="${m.video}"></video>`
+      : `<div class="mc-video mc-frame-empty" data-pane="video">No video</div>`) +
+    frameImg +
+    `</div></div>` +
+    `<div class="mc-audio">${
+      m.audio ? `<audio controls preload="none" src="${m.audio}"></audio>` : ""
+    }</div>` +
+    `<div class="mc-foot">` +
+    `<span class="mc-when">${escapeHtml(when)}</span>` +
+    `<div class="mc-actions">` +
+    (m.video ? `<a class="mc-act" download href="${m.video}" title="Download video">⬇ Video</a>` : "") +
+    (m.audio ? `<a class="mc-act" download href="${m.audio}" title="Download audio">⬇ Audio</a>` : "") +
+    (m.lastFrame ? `<a class="mc-act" download href="${m.lastFrame}" title="Download last frame">⬇ Frame</a>` : "") +
+    (m.video ? `<button class="mc-act" data-act="extend" title="Extend this video — opens the studio with it on the timeline at double length">⧉ Extend</button>` : "") +
+    (m.lastFrame ? `<button class="mc-act" data-act="reuse" title="Use last frame in a new generation">↻ Reuse frame</button>` : "") +
+    `<button class="mc-act mc-del" data-act="delete" title="Delete">${TRASH_SVG}</button>` +
+    `</div></div>` +
+    (promptTxt ? `<p class="mc-prompt">${escapeHtml(promptTxt)}</p>` : "");
+  wireMediaCard(card, m);
+  return card;
+}
+
+function wireMediaCard(card, m) {
+  card.querySelectorAll(".mc-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const which = tab.dataset.mtab;
+      card.querySelectorAll(".mc-tab").forEach((t) =>
+        t.classList.toggle("active", t === tab),
+      );
+      card.querySelectorAll("[data-pane]").forEach((p) =>
+        p.classList.toggle("hidden", p.dataset.pane !== which),
+      );
+    });
+  });
+  const delBtn = card.querySelector('[data-act="delete"]');
+  if (delBtn) delBtn.addEventListener("click", () => deleteMedia(m.id));
+  const reuseBtn = card.querySelector('[data-act="reuse"]');
+  if (reuseBtn && m.lastFrame)
+    reuseBtn.addEventListener("click", () => reuseLastFrame(m.lastFrame));
+  const extendBtn = card.querySelector('[data-act="extend"]');
+  if (extendBtn && m.video)
+    extendBtn.addEventListener("click", () => extendVideo(m));
+}
+
+async function deleteMedia(mediaId) {
+  if (!confirm("Delete this artifact and its files?")) return;
+  await api(`/api/projects/${state.currentProjectId}/media/${mediaId}`, {
+    method: "DELETE",
+  });
+  refreshLibrary();
+}
+
+// Pull the stored last-frame image, push it into the engine input bucket as a start image,
+// then enter the studio with that shot queued up for the next generation.
+async function reuseLastFrame(url) {
+  try {
+    const blob = await fetch(url).then((r) => r.blob());
+    const fd = new FormData();
+    fd.append("file", blob, "last_frame.png");
+    const res = await fetch("/api/upload-image", { method: "POST", body: fd }).then(
+      (r) => r.json(),
+    );
+    enterStudio();
+    addSegment("image", "Continue from the previous shot.", {
+      imageFile: res.imageFile,
+      imageB64: res.imageB64,
+    });
+  } catch {
+    alert("Could not reuse that frame.");
+  }
+}
+
+// Enter the studio for the current project (from library or a project card).
+function enterStudio() {
+  setScreen("studio");
+  setPhase("setup");
+}
+
 /* ------------------------------- timeline model ------------------------------- */
 function frames() {
   const dur = parseFloat($("duration").value) || 1;
@@ -139,11 +989,46 @@ function totalFrames() {
   return Math.max(mainSum, frames(), 1);
 }
 
-/* Scale main segment lengths proportionally so they exactly fill the total frame count. */
+/* Scale main segment lengths proportionally so they exactly fill the total frame count.
+   Locked segments (video shots anchored to a real clip length) keep their length; the
+   remaining frames are shared among the flexible (text/image) shots. When there is no
+   flexible shot to absorb the remainder, everything is scaled proportionally (fallback). */
 function fitToTotal() {
   const n = state.segments.length;
   if (n === 0) return;
   const total = frames();
+
+  const locked = state.segments.filter((s) => s.lockLen);
+  const flex = state.segments.filter((s) => !s.lockLen);
+  const lockedSum = locked.reduce((a, s) => a + (s.length || 0), 0);
+  const remainder = total - lockedSum;
+
+  // Only honor the locks when the flexible shots can still fill the remaining space.
+  if (locked.length && flex.length && remainder >= MIN_LEN * flex.length) {
+    let sum = flex.reduce((a, s) => a + (s.length || 0), 0);
+    if (sum <= 0) {
+      const per = Math.floor(remainder / flex.length);
+      flex.forEach((s) => (s.length = per));
+      sum = per * flex.length;
+    }
+    const scale = remainder / sum;
+    flex.forEach(
+      (s) => (s.length = Math.max(MIN_LEN, Math.round(s.length * scale))),
+    );
+    const ns = flex.reduce((a, s) => a + s.length, 0);
+    const last = flex[flex.length - 1];
+    last.length = Math.max(MIN_LEN, last.length + (remainder - ns));
+    updateTimelineInfo();
+    return;
+  }
+  // A lone locked video (no flexible shot): keep its real length, leaving a generated
+  // tail after it if the timeline is longer — that tail is the extension to be rendered.
+  if (locked.length && !flex.length && lockedSum <= total) {
+    updateTimelineInfo();
+    return;
+  }
+
+  // Fallback: proportional scale of everything to fill the timeline.
   let sum = state.segments.reduce((a, s) => a + (s.length || 0), 0);
   if (sum <= 0) {
     const per = Math.floor(total / n);
@@ -170,12 +1055,17 @@ function updateTimelineInfo() {
 function addSegment(type, prompt = "", extra = {}) {
   const total = frames();
   const s = mkSeg(type, prompt, extra);
-  s.length = Math.max(MIN_LEN, Math.round(total / (state.segments.length + 1)));
+  // A video shot anchors to its real clip length (extra.length); everything else takes an
+  // even share of the timeline and is then rescaled to fit by fitToTotal.
+  s.length = extra.length
+    ? Math.max(MIN_LEN, Math.round(extra.length))
+    : Math.max(MIN_LEN, Math.round(total / (state.segments.length + 1)));
   state.segments.push(s);
   fitToTotal();
   renderTimeline();
   selectSegment(s.id);
   refreshPreview();
+  return s;
 }
 
 function removeSegment(id) {
@@ -183,6 +1073,7 @@ function removeSegment(id) {
   if (state.selectedId === id) {
     state.selectedId = null;
     $("segEditor").classList.add("hidden");
+    $("globalView").classList.remove("hidden");
   }
   if (state.segments.length) fitToTotal();
   renderTimeline();
@@ -230,19 +1121,23 @@ function renderMain() {
     block.className =
       "tl-block" +
       (s.type === "image" ? " image" : "") +
+      (s.type === "video" ? " video" : "") +
       (s.id === state.selectedId ? " selected" : "");
     block.dataset.id = s.id;
     block.style.left = `${(start / total) * 100}%`;
     block.style.width = `${(s.length / total) * 100}%`;
-    const kind = s.type === "image" ? "IMG" : "TEXT";
-    // Image shots render as a repeating filmstrip of the reference thumbnail so
-    // the timeline reads like a frame sequence rather than just prompt text.
+    const kind =
+      s.type === "image" ? "IMG" : s.type === "video" ? "VIDEO" : "TEXT";
+    // Image shots (and now video shots) render as a repeating filmstrip of the reference
+    // thumbnail so the timeline reads like a frame sequence rather than just prompt text.
+    const film = s.type === "video" ? s.poster : s.imageB64;
     block.innerHTML =
-      (s.imageB64
-        ? `<div class="b-film" style="background-image:url('${s.imageB64}')"></div>`
+      (film
+        ? `<div class="b-film" style="background-image:url('${film}')"></div>`
         : "") +
       `<div class="b-head"><span class="b-kind">${kind}</span></div>` +
       `<div class="b-prompt" title="${escapeHtml(s.prompt || "")}">${escapeHtml(s.prompt || "(no prompt)")}</div>` +
+      delBtnHtml("Delete shot") +
       (idx < state.segments.length - 1
         ? `<div class="b-handle" data-handle="1"></div>`
         : "");
@@ -264,8 +1159,8 @@ function renderClips() {
     state.videoClips,
     $("laneMotion"),
     $("useMotion").checked,
-    "Auto motion guidance (follows your shots)",
-    "Motion off",
+    "Add an IC-LoRA video for camera / video-to-video guidance",
+    "IC-LoRA off",
   );
   renderLane(
     "audio",
@@ -305,6 +1200,7 @@ function renderLane(kind, clips, lane, autoOn, autoText, offText) {
       `<span class="c-kind">${kindLabel}</span>` +
       `<div class="c-handle left" data-handle="left"></div>` +
       `<div class="c-handle right" data-handle="right"></div>` +
+      delBtnHtml("Delete clip") +
       `<div class="c-label" title="${escapeHtml(c.name)}">${escapeHtml(c.name)}</div>`;
     lane.appendChild(el);
   });
@@ -327,6 +1223,12 @@ function bindBlockPointer(lane) {
 function onBlockDown(e, block, lane) {
   e.preventDefault();
   const id = block.dataset.id;
+  // Delete icon (only present while selected) — remove and stop.
+  if (e.target.closest("[data-del]")) {
+    e.stopPropagation();
+    removeSegment(id);
+    return;
+  }
   const isHandle = e.target.dataset.handle === "1";
   const laneRect = lane.getBoundingClientRect();
   const total = totalFrames();
@@ -381,7 +1283,11 @@ function onBlockDown(e, block, lane) {
   const onUp = () => {
     document.removeEventListener("pointermove", onMove);
     document.removeEventListener("pointerup", onUp);
-    if (!moved) selectSegment(id);
+    // Tap (no drag): toggle — select, or deselect back to global settings.
+    if (!moved) {
+      if (state.selectedId === id) showGlobalView();
+      else selectSegment(id);
+    }
     renderTimeline();
   };
   document.addEventListener("pointermove", onMove);
@@ -410,6 +1316,12 @@ function onClipDown(e, el, lane, kind) {
   const id = el.dataset.id;
   const c = clipsOf(kind).find((x) => x.id === id);
   if (!c) return;
+  // Delete icon (only present while selected) — remove and stop.
+  if (e.target.closest("[data-del]")) {
+    e.stopPropagation();
+    removeClip(id);
+    return;
+  }
   const handle = e.target.dataset.handle; // 'left' | 'right' | undefined (move)
   const laneRect = lane.getBoundingClientRect();
   const total = totalFrames();
@@ -440,17 +1352,34 @@ function onClipDown(e, el, lane, kind) {
   const onUp = () => {
     document.removeEventListener("pointermove", onMove);
     document.removeEventListener("pointerup", onUp);
-    if (!moved) selectClip(id);
+    // Tap (no drag): toggle — select, or deselect back to global settings.
+    if (!moved) {
+      if (state.selectedClipId === id) showGlobalView();
+      else selectClip(id);
+    }
     renderTimeline();
   };
   document.addEventListener("pointermove", onMove);
   document.addEventListener("pointerup", onUp);
 }
 
+/* ------------------------------- side panel: view switching ------------------------------- */
+// The right panel shows global settings by default and swaps to the shot/clip
+// editor while a timeline item is selected. Deselecting returns to global.
+function showGlobalView() {
+  state.selectedId = null;
+  state.selectedClipId = null;
+  $("segEditor").classList.add("hidden");
+  $("clipEditor").classList.add("hidden");
+  $("globalView").classList.remove("hidden");
+  renderTimeline();
+}
+
 /* ------------------------------- main-shot editor ------------------------------- */
 function selectSegment(id) {
   state.selectedClipId = null;
   $("clipEditor").classList.add("hidden");
+  $("globalView").classList.add("hidden");
   state.selectedId = id;
   const s = state.segments.find((x) => x.id === id);
   if (!s) return;
@@ -458,12 +1387,22 @@ function selectSegment(id) {
   const ed = $("segEditor");
   ed.classList.remove("hidden");
   $("segEditorTitle").textContent =
-    s.type === "image" ? "Image shot" : "Text shot";
+    s.type === "image"
+      ? "Image shot"
+      : s.type === "video"
+        ? "Video shot"
+        : "Text shot";
   $("segPrompt").value = s.prompt || "";
   const wrap = $("segImageWrap");
   if (s.type === "image" && s.imageB64) {
     wrap.classList.remove("hidden");
     $("segImage").src = s.imageB64;
+    $("segReplaceImg").classList.remove("hidden");
+  } else if (s.type === "video" && s.poster) {
+    // Video shots preview the poster thumbnail; there is no in-place replace (delete + re-add).
+    wrap.classList.remove("hidden");
+    $("segImage").src = s.poster;
+    $("segReplaceImg").classList.add("hidden");
   } else wrap.classList.add("hidden");
   refreshSegEditorLen();
 }
@@ -480,6 +1419,7 @@ function refreshSegEditorLen() {
 function selectClip(id) {
   state.selectedId = null;
   $("segEditor").classList.add("hidden");
+  $("globalView").classList.add("hidden");
   state.selectedClipId = id;
   const c = findClip(id);
   if (!c) return;
@@ -519,6 +1459,7 @@ function removeClip(id) {
   if (state.selectedClipId === id) {
     state.selectedClipId = null;
     $("clipEditor").classList.add("hidden");
+    $("globalView").classList.remove("hidden");
   }
   renderTimeline();
   refreshPreview();
@@ -623,6 +1564,64 @@ function addMediaClip(kind, res) {
   });
 }
 
+// Add a video to the MAIN track as a shot — the "extend a video" path. The shot anchors to
+// the clip's real length (lockLen), so any timeline beyond it is generated as a continuation.
+// opts.doubleDuration stretches the timeline to 2× the clip first (used by Extend).
+function addVideoShot(res, opts = {}) {
+  probeDuration(res.url, "video", (dur) => {
+    const fps = curFps();
+    const len = dur > 0 ? Math.round(dur * fps) : Math.round(2 * fps);
+    if (opts.doubleDuration && dur > 0) {
+      const maxDur = parseInt($("duration").max) || 60;
+      $("duration").value = Math.min(maxDur, Math.max(1, Math.round(dur * 2)));
+    }
+    const seg = addSegment("video", "", {
+      imageFile: res.file,
+      videoUrl: res.url,
+      name: res.name,
+      lockLen: true,
+      length: len,
+    });
+    captureVideoPoster(res.url, (poster) => {
+      seg.poster = poster;
+      renderTimeline();
+      if (state.selectedId === seg.id) selectSegment(seg.id);
+    });
+  });
+}
+
+// Clear the timeline (shots + clips) so a flow can start from a blank studio.
+function resetTimeline() {
+  state.segments = [];
+  state.audioClips = [];
+  state.videoClips = [];
+  state.selectedId = null;
+  state.selectedClipId = null;
+  $("segEditor").classList.add("hidden");
+  $("clipEditor").classList.add("hidden");
+  $("globalView").classList.remove("hidden");
+}
+
+// Extend a generated video: open a fresh studio timeline with the source video on the main
+// track and the duration set to double the clip, so the second half renders as a continuation.
+async function extendVideo(m) {
+  if (!m.video) return;
+  try {
+    const blob = await fetch(m.video).then((r) => r.blob());
+    const fd = new FormData();
+    fd.append("file", blob, `${m.name || "clip"}.mp4`);
+    const res = await fetch("/api/upload-media", {
+      method: "POST",
+      body: fd,
+    }).then((r) => r.json());
+    enterStudio();
+    resetTimeline();
+    addVideoShot(res, { doubleDuration: true });
+  } catch {
+    alert("Could not load that video to extend.");
+  }
+}
+
 /* ------------------------------- composition preview ------------------------------- */
 /* Plays back the timeline the user composed: image shots hold on screen for their
    span, motion-video clips play, audio clips are heard, a text shot shows its prompt
@@ -651,6 +1650,17 @@ function activeVisual(frame) {
   for (const s of state.segments) {
     if (frame >= cursor && frame < cursor + s.length) {
       if (s.type === "image" && s.imageB64) return { kind: "image", seg: s };
+      if (s.type === "video" && s.videoUrl)
+        return {
+          kind: "video",
+          clip: {
+            id: s.id,
+            url: s.videoUrl,
+            start: cursor,
+            length: s.length,
+            trimStart: s.trimStart || 0,
+          },
+        };
       return { kind: "text", seg: s };
     }
     cursor += s.length;
@@ -867,6 +1877,12 @@ function buildTimelineData() {
       seg.imageFile = s.imageFile;
       seg.imageB64 = s.imageB64;
     }
+    // A main-track video shot is passed as a video guide: LTX Director reads the engine
+    // input filename from `imageFile` for both image and video segments (type discriminates).
+    if (s.type === "video" && s.imageFile) {
+      seg.imageFile = s.imageFile;
+      seg.trimStart = s.trimStart || 0;
+    }
     cursor += s.length;
     return seg;
   });
@@ -901,7 +1917,9 @@ function buildTimelineData() {
     retakeStrength: 1,
     retakeVideo: null,
     normalStartFrame: 0,
-    normalDurationFrames: cursor,
+    // Render the full timeline length, not just the covered shots — a video shot that
+    // occupies only the first part leaves a generated tail (this is how "extend" works).
+    normalDurationFrames: Math.max(cursor, frames()),
     segments,
     motionSegments,
     audioSegments,
@@ -912,6 +1930,7 @@ async function generate() {
   const hasAudioClips = state.audioClips.length > 0;
   const lip = $("lipSync").checked;
   const params = {
+    project_id: state.currentProjectId,
     timeline: buildTimelineData(),
     resolution: $("resolution").value,
     aspect: $("aspect").value,
@@ -1053,7 +2072,16 @@ function handleWS(m) {
       showPreview(m.image, m.mime);
       break;
     case "complete":
-      onComplete(m.video_url);
+      onComplete(m.video_url, m);
+      break;
+    case "character_complete":
+      // A character's reference video finished (or errored) — refresh the library so the card flips
+      // out of its generating state. Only if it belongs to the project we're currently viewing.
+      if (state.currentProjectId === m.project_id) {
+        refreshLibrary().then(() => {
+          if (state.screen === "library") setLibTab("characters");
+        });
+      }
       break;
     case "error":
       showGenError(m.message || "Error");
@@ -1064,10 +2092,17 @@ function handleWS(m) {
   }
 }
 
-function onComplete(url) {
+function onComplete(url, msg) {
   state.generating = false;
   if (url) {
     state.hasResult = true;
+    // Remember which project media item this result was filed into, and reveal the
+    // "Project library" action so the user can jump back to the grid.
+    state.lastMediaId = (msg && msg.media && msg.media.id) || null;
+    $("backToLibrary").classList.toggle(
+      "hidden",
+      !(state.currentProjectId && state.lastMediaId),
+    );
     const v = $("video");
     // Fit the result player to the video's real dimensions so portrait/square
     // output isn't letterboxed inside a wide 16:9 frame.
@@ -1083,6 +2118,8 @@ function onComplete(url) {
     v.src = url;
     $("downloadVideo").href = url;
     setPhase("result");
+    // The last frame is produced by the workflow itself (ImageFromBatch → SaveImage) and filed
+    // into the project media item server-side, so there's nothing to capture on the client.
   } else {
     showGenError(
       "Generation finished but produced no video. Check the engine console for details.",
@@ -1091,6 +2128,11 @@ function onComplete(url) {
 }
 
 /* ------------------------------- models ------------------------------- */
+function allowLocate() {
+  // RunPod is download-only; desktop/repo keep "Locate existing file". Defaults to allowed.
+  return state.config?.environment?.allow_locate !== false;
+}
+
 function refreshModelBadge() {
   const missing = (state.config.models || []).filter(
     (m) => m.required && !m.present,
@@ -1142,7 +2184,7 @@ function renderModels() {
             m.present
               ? ""
               : `<button class="btn btn-sm dl">Download</button>
-          <button class="btn btn-sm loc">Locate…</button>`
+          ${allowLocate() ? `<button class="btn btn-sm loc">Locate…</button>` : ""}`
           }
         </div>
       </div>
@@ -1150,7 +2192,8 @@ function renderModels() {
       <div class="model-sub dlmsg"></div>`;
     if (!m.present) {
       item.querySelector(".dl").addEventListener("click", () => download(m.id));
-      item.querySelector(".loc").addEventListener("click", () => locate(m.id));
+      const locBtn = item.querySelector(".loc");
+      if (locBtn) locBtn.addEventListener("click", () => locate(m.id));
     }
     list.appendChild(item);
   });
@@ -1184,9 +2227,7 @@ function updateDownload(m) {
 }
 
 async function locate(id) {
-  const path = prompt(
-    "Full path to the model file on your disk / external drive:",
-  );
+  const path = await pickFile("Select the model file on your disk / external drive");
   if (!path) return;
   const res = await api("/api/models/locate", {
     method: "POST",
@@ -1206,11 +2247,11 @@ async function reloadModels() {
 
 /* ------------------------------- voice / TTS ------------------------------- */
 // Pending (not-yet-committed) generated speech lives here so the user can preview
-// and regenerate before dropping it on the timeline. `refFile` is the uploaded
-// reference clip (relative engine-input path) used for zero-shot cloning.
-// `mode` is 'clone' (Clone-a-voice tab, needs a reference clip) or 'sft' (Text-to-audio tab, the
-// engine's built-in narrator voice). The reference transcript lives in the visible #ttsRefText box.
-const tts = { pending: null, refFile: null, installed: false, mode: "clone" };
+// and regenerate before dropping it on the timeline. Voices are always cloned (zero-shot) from a
+// reference clip: `refSource` is 'character' (a project character's mood clip) or 'upload' (a file
+// the user picks); `refFile` is the resolved engine-input path of that clip. The reference transcript
+// lives in the visible, editable #ttsRefText box — the model clones the voice USING that text.
+const tts = { pending: null, refFile: null, installed: false, refSource: "character" };
 
 function openAudioModal() {
   switchAudioTab("upload");
@@ -1219,21 +2260,105 @@ function openAudioModal() {
 }
 
 function switchAudioTab(name) {
-  // Both speech tabs ('speak' = clone, 'tts' = text-to-audio) share one pane; only the input mode
-  // and the reference block differ.
-  const pane = name === "tts" ? "speak" : name;
   document
     .querySelectorAll("#audioTabs .tab")
     .forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
   document
     .querySelectorAll("#audioModal .tab-pane")
-    .forEach((p) => p.classList.toggle("hidden", p.dataset.pane !== pane));
-  if (pane !== "speak") return;
-  tts.mode = name === "tts" ? "sft" : "clone";
-  $("ttsRefBlock").classList.toggle("hidden", tts.mode !== "clone");
-  $("ttsPlainNote").classList.toggle("hidden", tts.mode !== "sft");
+    .forEach((p) => p.classList.toggle("hidden", p.dataset.pane !== name));
+  if (name !== "speak") return;
+  // "Clone a voice" — reference comes from a project character's mood clip, or an uploaded clip.
+  populateCharacterRef();
+  const hasChars = (state.characters || []).some(
+    (c) => c.status === "ready" && (c.moods || []).some((m) => m.clip),
+  );
+  setRefSource(hasChars ? "character" : "upload");
   resetTtsPreview();
   refreshTtsStatus();
+}
+
+// Toggle the reference source: a character's mood clip vs an uploaded file.
+function setRefSource(src) {
+  tts.refSource = src;
+  document
+    .querySelectorAll("#ttsRefSource .ref-src-btn")
+    .forEach((b) => b.classList.toggle("active", b.dataset.src === src));
+  $("ttsRefChar").classList.toggle("hidden", src !== "character");
+  $("ttsRefUpload").classList.toggle("hidden", src !== "upload");
+  tts.refFile = null;
+  if (src === "character") {
+    selectCharacterMood();
+  } else {
+    $("ttsRefName").textContent = "No reference selected";
+    $("ttsRefText").value = "";
+  }
+}
+
+function populateCharacterRef() {
+  const csel = $("ttsCharSelect");
+  const ready = (state.characters || []).filter(
+    (c) => c.status === "ready" && (c.moods || []).some((m) => m.clip),
+  );
+  csel.innerHTML = "";
+  if (!ready.length) {
+    csel.innerHTML = '<option value="">No characters yet…</option>';
+    $("ttsMoodSelect").innerHTML = "";
+    return;
+  }
+  ready.forEach((c) => {
+    const o = document.createElement("option");
+    o.value = c.id;
+    o.textContent = c.name || "Character";
+    csel.appendChild(o);
+  });
+  populateMoodOptions();
+}
+
+function populateMoodOptions() {
+  const c = (state.characters || []).find((x) => x.id === $("ttsCharSelect").value);
+  const msel = $("ttsMoodSelect");
+  msel.innerHTML = "";
+  ((c && c.moods) || [])
+    .filter((m) => m.clip)
+    .forEach((m) => {
+      const o = document.createElement("option");
+      o.value = m.key;
+      o.textContent = m.label || m.key;
+      msel.appendChild(o);
+    });
+}
+
+// Load the selected character+mood clip into the engine input bucket and prefill the transcript.
+async function selectCharacterMood() {
+  if (tts.refSource !== "character") return;
+  const cid = $("ttsCharSelect").value;
+  const mood = $("ttsMoodSelect").value;
+  tts.refFile = null;
+  if (!cid || !mood || !state.currentProjectId) return;
+  $("ttsStatus").textContent = "Loading reference voice…";
+  try {
+    const res = await api(
+      `/api/projects/${state.currentProjectId}/characters/${cid}/use-mood`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mood }),
+      },
+    );
+    if (res.ok) {
+      tts.refFile = res.file;
+      $("ttsRefText").value = res.ref_text || "";
+      // Prefill the tone/emotion to match the chosen mood (reinforces the reference's delivery).
+      $("ttsInstruct").value = res.tone || "";
+      $("ttsStatus").textContent = res.ref_text
+        ? ""
+        : "No transcript stored — type what the clip says below.";
+    } else {
+      $("ttsStatus").textContent = res.error || "Couldn't load that mood clip.";
+    }
+  } catch {
+    $("ttsStatus").textContent = "Couldn't load that mood clip.";
+  }
 }
 
 function populateTtsLangs(langs) {
@@ -1390,24 +2515,27 @@ async function ttsGenerate() {
     $("ttsStatus").textContent = "Enter the dialog to speak.";
     return;
   }
-  const mode = tts.mode === "sft" ? "sft" : "clone";
   const instruct = $("ttsInstruct").value.trim();
   const refText = $("ttsRefText").value.trim();
-  if (mode === "clone" && !tts.refFile) {
-    $("ttsStatus").textContent = "Choose a reference clip first.";
+  if (!tts.refFile) {
+    $("ttsStatus").textContent =
+      tts.refSource === "character"
+        ? "Pick a character and mood first."
+        : "Choose a reference clip first.";
     return;
   }
   // Cloning without a tone/instruction uses zero-shot, which REQUIRES the reference transcript —
   // an empty one makes the model produce garbled/foreign-sounding speech. Block it with a clear nudge.
-  if (mode === "clone" && !instruct && !refText) {
+  if (!instruct && !refText) {
     $("ttsStatus").textContent =
       "Add what the reference clip says (the box above) — it's needed to clone the voice.";
     $("ttsRefText").focus();
     return;
   }
   const body = {
+    project_id: state.currentProjectId,
     text,
-    mode,
+    mode: "clone",
     instruct,
     ref_text: refText,
     ref_file: tts.refFile,
@@ -1559,7 +2687,12 @@ function wireEvents() {
   $("addText").addEventListener("click", () => addSegment("text", ""));
   $("addImage").addEventListener("click", pickImage);
   $("addAudio").addEventListener("click", openAudioModal);
+  // + Video adds to the MAIN track (for extending a video); + IC-LoRA adds to the
+  // separate IC-LoRA/motion lane (camera / video-to-video guidance).
   $("addVideo").addEventListener("click", () =>
+    uploadMedia("video", (res) => addVideoShot(res)),
+  );
+  $("addMotion").addEventListener("click", () =>
     uploadMedia("video", (res) => addMediaClip("video", res)),
   );
 
@@ -1579,6 +2712,14 @@ function wireEvents() {
     openModels();
   });
   $("ttsRefBtn").addEventListener("click", pickRefVoice);
+  document.querySelectorAll("#ttsRefSource .ref-src-btn").forEach((b) =>
+    b.addEventListener("click", () => setRefSource(b.dataset.src)),
+  );
+  $("ttsCharSelect").addEventListener("change", () => {
+    populateMoodOptions();
+    selectCharacterMood();
+  });
+  $("ttsMoodSelect").addEventListener("change", selectCharacterMood);
   $("ttsGenerate").addEventListener("click", ttsGenerate);
   $("ttsRegen").addEventListener("click", ttsGenerate);
   $("ttsAdd").addEventListener("click", ttsAddToTimeline);
@@ -1617,10 +2758,20 @@ function wireEvents() {
   $("closeAdvanced").addEventListener("click", () =>
     closeModal("advancedModal"),
   );
+
+  // Server-side folder browser (RunPod)
+  $("closeFolder").addEventListener("click", () => fsClose(""));
+  $("fsMkdir").addEventListener("click", fsMkdir);
+  $("fsUse").addEventListener("click", () => fsClose(fsBrowser.path));
+  $("fsNewName").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); fsMkdir(); }
+  });
   // click on backdrop closes the modal
   document.querySelectorAll(".modal").forEach((m) =>
     m.addEventListener("pointerdown", (e) => {
-      if (e.target === m) closeModal(m.id);
+      if (e.target !== m) return;
+      if (m.id === "folderModal") fsClose(""); // resolve the pending pickDir promise
+      else closeModal(m.id);
     }),
   );
 
@@ -1668,25 +2819,11 @@ function wireEvents() {
       refreshPreview();
     }
   });
-  $("segClose").addEventListener("click", () => {
-    state.selectedId = null;
-    $("segEditor").classList.add("hidden");
-    renderMain();
-  });
-  $("segDelete").addEventListener("click", () => {
-    if (state.selectedId) removeSegment(state.selectedId);
-  });
+  $("segClose").addEventListener("click", showGlobalView);
   $("segReplaceImg").addEventListener("click", replaceImage);
 
   // clip editor
-  $("clipClose").addEventListener("click", () => {
-    state.selectedClipId = null;
-    $("clipEditor").classList.add("hidden");
-    renderClips();
-  });
-  $("clipDelete").addEventListener("click", () => {
-    if (state.selectedClipId) removeClip(state.selectedClipId);
-  });
+  $("clipClose").addEventListener("click", showGlobalView);
   $("clipVoice").addEventListener("change", (e) => {
     const c = findClip(state.selectedClipId);
     if (c) {
@@ -1708,11 +2845,72 @@ function wireEvents() {
 
   // result actions
   $("editAgain").addEventListener("click", () => setPhase("setup"));
+  $("backToLibrary").addEventListener("click", () => {
+    $("video").removeAttribute("src");
+    state.hasResult = false;
+    refreshLibrary();
+    setScreen("library");
+  });
   $("newVideo").addEventListener("click", () => {
     $("video").removeAttribute("src");
     state.hasResult = false;
     setPhase("setup");
   });
+
+  // workspace / library navigation
+  $("brandHome").addEventListener("click", () => {
+    loadProjects();
+    setScreen("projects");
+  });
+  $("crumbProjects").addEventListener("click", () => {
+    loadProjects();
+    setScreen("projects");
+  });
+  // The project name in the breadcrumb is a "back to this project's media" control — used from
+  // the studio it returns to the library grid rather than all the way out to the workspace.
+  $("crumbProject").addEventListener("click", () => {
+    if (!state.currentProjectId) return;
+    refreshLibrary();
+    setScreen("library");
+  });
+  $("newProject").addEventListener("click", newProject);
+  $("newProjectEmpty").addEventListener("click", newProject);
+  $("openExisting").addEventListener("click", openExisting);
+  $("newGeneration").addEventListener("click", enterStudio);
+  $("newGenerationEmpty").addEventListener("click", enterStudio);
+  $("libRename").addEventListener("click", renameCurrentProject);
+  // Library sub-tabs + characters
+  document.querySelectorAll("#libTabs .lib-tab").forEach((t) =>
+    t.addEventListener("click", () => setLibTab(t.dataset.libtab)),
+  );
+  $("newCharacter").addEventListener("click", openCharacterModal);
+  $("newCharacterEmpty").addEventListener("click", openCharacterModal);
+  $("closeCharacter").addEventListener("click", () => closeModal("characterModal"));
+  $("charGenerate").addEventListener("click", createCharacter);
+  // Mood-clip crop editor
+  $("closeCrop").addEventListener("click", closeCropEditor);
+  $("cropSave").addEventListener("click", saveCropChanges);
+  $("cropList").addEventListener("click", (e) => {
+    const b = e.target.closest(".crop-play");
+    if (b) playCropRegion(+b.dataset.idx);
+  });
+  initCropDrag();
+}
+
+async function renameCurrentProject() {
+  if (!state.currentProjectId) return;
+  const name = (
+    prompt("Rename project:", state.currentProject.name || "") || ""
+  ).trim();
+  if (!name) return;
+  await api(`/api/projects/${state.currentProjectId}/rename`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  state.currentProject.name = name;
+  $("libTitle").textContent = name;
+  $("crumbProject").textContent = name;
 }
 
 function escapeHtml(s) {

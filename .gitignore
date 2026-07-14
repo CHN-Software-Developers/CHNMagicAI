@@ -1,5 +1,5 @@
 # ============================================================================
-# AIVideoBuilder .gitignore
+# CHNMagicAI .gitignore
 #
 # The vendored engine SOURCE (engine/ComfyUI + custom_nodes) IS committed so the
 # app ships self-contained: on first run only the Python packages (into

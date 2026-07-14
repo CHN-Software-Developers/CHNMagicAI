@@ -1,4 +1,4 @@
-"""AIVideoBuilder voice/TTS service (part of AIVideoBuilder, GPL-3.0).
+"""CHNMagicAI voice/TTS service (part of CHNMagicAI, GPL-3.0).
 
 A thin HTTP wrapper that runs INSIDE the isolated TTS environment and drives the *pristine*,
 unmodified CosyVoice 3 package (Apache-2.0) plus faster-whisper (MIT). The main FastAPI
@@ -39,7 +39,7 @@ CFG = {
 _state = {"cosy": None, "whisper": None, "spks": [], "sr": 24000}
 _load_lock = threading.Lock()
 
-app = FastAPI(title="AIVideoBuilder TTS")
+app = FastAPI(title="CHNMagicAI TTS")
 
 
 def _prepare_cosyvoice_import():

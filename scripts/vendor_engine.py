@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Vendor a fresh, private ComfyUI engine for AIVideoBuilder.
+"""Vendor a fresh, private ComfyUI engine for CHNMagicAI.
 
 Produces `engine/ComfyUI` (pristine ComfyUI) + the three custom-node packages the LTX Director 2
 workflow needs, and (optionally) a Python venv with all dependencies.

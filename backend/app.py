@@ -7,13 +7,15 @@ import json
 import os
 
 import aiohttp
-from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import JSONResponse, Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 
 import bootstrap
 import comfy_client
+import env as env_mod
 import models as model_mgr
+import projects as projects_mod
 import tts as tts_mod
 import workflow as wf
 
@@ -23,6 +25,8 @@ LOCAL_CONFIG_PATH = os.path.join(ROOT, "config", "settings.local.json")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
 VIDEO_EXTS = (".mp4", ".webm", ".mov", ".mkv", ".gif")
+AUDIO_EXTS = (".mp3", ".wav", ".flac", ".m4a", ".ogg")
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 
 # ComfyUI node id -> friendly stage label for the progress bar
 STAGE_LABELS = {
@@ -53,6 +57,7 @@ def load_settings():
     if os.path.isfile(LOCAL_CONFIG_PATH):
         with open(LOCAL_CONFIG_PATH, "r", encoding="utf-8") as f:
             _deep_merge(settings, json.load(f))
+    env_mod.apply(settings)
     return settings
 
 
@@ -116,15 +121,17 @@ class Hub:
             self.unregister(ws)
 
 
-app = FastAPI(title="AIVideoBuilder")
+app = FastAPI(title="CHNMagicAI")
 hub = Hub()
 settings = load_settings()
 comfy = comfy_client.ComfyClient(settings["comfy_host"], settings["comfy_port"])
 tts_svc = tts_mod.TtsService(settings)
+store = projects_mod.ProjectStore()
 # Tracks the in-flight prompt. `errored` is set when ComfyUI reports an execution_error for it,
 # so the trailing `executing {node: null}` (which ComfyUI sends even after a failure) is not
-# mistaken for a successful completion.
-_current = {"prompt_id": None, "errored": False}
+# mistaken for a successful completion. `project_id`/`meta` remember which project (if any) the
+# result should be filed into and the settings snapshot to store with it.
+_current = {"prompt_id": None, "errored": False, "project_id": None, "meta": None, "character": None}
 
 
 @app.on_event("startup")
@@ -182,12 +189,14 @@ async def _consume(queue):
         elif mtype in ("execution_error",):
             if data.get("prompt_id") == _current["prompt_id"]:
                 _current["errored"] = True
+                _fail_current_character()
             await hub.broadcast({"type": "error",
                                  "message": _format_error(data)})
             await _free_models()
         elif mtype in ("execution_interrupted",):
             if data.get("prompt_id") == _current["prompt_id"]:
                 _current["errored"] = True
+                _fail_current_character()
             await hub.broadcast({"type": "error", "message": "Generation was interrupted."})
             await _free_models()
         elif mtype in ("status",):
@@ -228,26 +237,212 @@ async def _free_models():
 async def _on_complete(prompt_id):
     async with aiohttp.ClientSession() as session:
         history = await comfy.get_history(session, prompt_id)
+    # A character reference-video run doesn't produce a normal MediaItem — it crops per-mood clips onto
+    # the character instead. Handle it and stop before the ordinary generation-filing path.
+    character = _current.get("character")
+    if character:
+        _current["character"] = None
+        await _finalize_character(history, character)
+        await _free_models()
+        return
     video = _find_video_output(history) if history else None
+    audio = _find_audio_output(history) if history else None
+    last_frame = _find_image_output(history) if history else None
+    msg = {"type": "complete", "prompt_id": prompt_id, "video_url": None}
     if video:
         q = f"filename={video['filename']}&subfolder={video.get('subfolder','')}&type={video.get('type','output')}"
-        await hub.broadcast({"type": "complete", "prompt_id": prompt_id, "video_url": f"/api/media?{q}"})
-    else:
-        await hub.broadcast({"type": "complete", "prompt_id": prompt_id, "video_url": None})
+        msg["video_url"] = f"/api/media?{q}"
+        # File the finished artifact into the active project (if any) — copies the video, its audio
+        # sidecar, and the workflow's last-frame still into the project folder as one MediaItem.
+        # The last frame comes straight from the graph (ImageFromBatch → SaveImage), so it's the
+        # exact final frame. No project → ephemeral, old single-result flow.
+        project_id = _current.get("project_id")
+        if project_id:
+            try:
+                item = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: store.add_generation(
+                        project_id, _output_src_path(video), _output_src_path(audio),
+                        _current.get("meta") or {}, _output_src_path(last_frame)))
+                if item:
+                    msg["project_id"] = project_id
+                    msg["media"] = _media_urls(project_id, item)
+            except Exception:
+                pass
+    await hub.broadcast(msg)
     await _free_models()
 
 
+def _output_src_path(entry):
+    """Absolute on-disk path of a ComfyUI output history entry (ComfyUI writes to <ROOT>/output)."""
+    if not entry or not entry.get("filename"):
+        return None
+    return os.path.join(ROOT, settings["output_dir"], entry.get("subfolder", "") or "", entry["filename"])
+
+
+def _media_urls(project_id, item):
+    """Turn a stored MediaItem (relative paths) into the API's served-URL shape for the frontend."""
+    mid = item["id"]
+
+    def u(kind):
+        return f"/api/projects/{project_id}/file/{mid}/{kind}"
+
+    return {
+        "id": mid, "type": item.get("type"), "created": item.get("created"),
+        "video": u("video") if item.get("video") else None,
+        "audio": u("audio") if item.get("audio") else None,
+        "lastFrame": u("lastframe") if item.get("lastFrame") else None,
+        "meta": item.get("meta", {}),
+    }
+
+
 def _find_video_output(history):
+    return _find_output_by_ext(history, VIDEO_EXTS)
+
+
+def _find_audio_output(history):
+    return _find_output_by_ext(history, AUDIO_EXTS)
+
+
+def _find_image_output(history):
+    """The workflow's last-frame still (SaveImage prefix 'last-frame'). Prefer that exact file so a
+    stray preview image from another node is never mistaken for it; fall back to any image output."""
+    best = None
+    for _node_id, out in (history.get("outputs") or {}).items():
+        for _key, val in out.items():
+            if not isinstance(val, list):
+                continue
+            for entry in val:
+                if not (isinstance(entry, dict) and str(entry.get("filename", "")).lower().endswith(IMAGE_EXTS)):
+                    continue
+                if os.path.basename(str(entry.get("filename", ""))).lower().startswith("last-frame"):
+                    return entry
+                best = best or entry
+    return best
+
+
+def _find_output_by_ext(history, exts):
     for _node_id, out in (history.get("outputs") or {}).items():
         for _key, val in out.items():
             if isinstance(val, list):
                 for entry in val:
-                    if isinstance(entry, dict) and str(entry.get("filename", "")).lower().endswith(VIDEO_EXTS):
+                    if isinstance(entry, dict) and str(entry.get("filename", "")).lower().endswith(exts):
                         return entry
     return None
 
 
+def _find_audio_output_named(history, prefix):
+    """A cropped mood clip output whose filename starts with `prefix` (the SaveAudioAdvanced
+    'mood/<charId>-<moodKey>' prefix). Matches on basename so the subfolder is ignored."""
+    plo = prefix.lower()
+    for _node_id, out in (history.get("outputs") or {}).items():
+        for _key, val in out.items():
+            if not isinstance(val, list):
+                continue
+            for entry in val:
+                if not isinstance(entry, dict):
+                    continue
+                fn = str(entry.get("filename", ""))
+                if fn.lower().endswith(AUDIO_EXTS) and os.path.basename(fn).lower().startswith(plo):
+                    return entry
+    return None
+
+
+def _character_urls(project_id, char):
+    """Turn a stored Character (relative paths) into the API's served-URL shape for the frontend."""
+    cid = char["id"]
+    moods = []
+    for m in char.get("moods", []):
+        moods.append({
+            "key": m.get("key"), "label": m.get("label"), "tone": m.get("tone", ""),
+            "line": m.get("line", ""),
+            "clip": (f"/api/projects/{project_id}/characters/{cid}/file/mood-{m['key']}"
+                     if m.get("clip") else None),
+            "hasRefText": bool(m.get("refText")),
+            "startSec": m.get("startSec"), "endSec": m.get("endSec"),
+        })
+    return {
+        "id": cid, "name": char.get("name"), "description": char.get("description"),
+        "created": char.get("created"), "status": char.get("status"),
+        "video": f"/api/projects/{project_id}/characters/{cid}/file/video" if char.get("video") else None,
+        "avatar": f"/api/projects/{project_id}/characters/{cid}/file/avatar" if char.get("avatar") else None,
+        "fullAudio": (f"/api/projects/{project_id}/characters/{cid}/file/full"
+                      if char.get("fullAudio") else None),
+        "moods": moods,
+    }
+
+
+def _fail_current_character():
+    """If the in-flight generation is a character reference-video that errored/was interrupted, mark
+    the character 'error' and clear the marker so it doesn't stay stuck 'generating'. Broadcast the
+    completion so the card flips out of its spinner."""
+    character = _current.get("character")
+    if not character:
+        return
+    _current["character"] = None
+    try:
+        store.set_character_error(character["project_id"], character["character_id"])
+    except Exception:
+        pass
+    asyncio.ensure_future(hub.broadcast({
+        "type": "character_complete", "project_id": character["project_id"],
+        "character_id": character["character_id"], "ok": False}))
+
+
+async def _finalize_character(history, character):
+    """Post-process a finished character reference-video: collect the per-mood cropped clips, transcribe
+    each (best-effort) for an accurate zero-shot ref_text, and file everything onto the character."""
+    project_id, char_id = character["project_id"], character["character_id"]
+    ok = False
+    try:
+        video = _find_video_output(history) if history else None
+        full_entry = _find_audio_output_named(history, f"{char_id}-full") if history else None
+        full_src = _output_src_path(full_entry) if full_entry else None
+        mood_clips = []
+        for mood in character.get("moods", []):
+            entry = _find_audio_output_named(history, f"{char_id}-{mood['key']}") if history else None
+            src = _output_src_path(entry) if entry else None
+            # Transcribe the ACTUAL generated clip (best-effort) so the reference transcript reflects
+            # what the clip really says, not the prompt line. Empty if Whisper isn't available.
+            ref_text = ""
+            if src and os.path.isfile(src):
+                try:
+                    data, status = await tts_svc.transcribe({"audio": src})
+                    if status == 200 and data.get("ok"):
+                        ref_text = (data.get("text") or "").strip()
+                except Exception:
+                    pass  # TTS not installed / transcription failed → user can type it in the clone UI
+            mood_clips.append({"key": mood["key"], "src": src, "refText": ref_text})
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: store.finalize_character(
+                project_id, char_id, _output_src_path(video), mood_clips, full_src=full_src))
+        ok = bool(result)
+    except Exception:
+        ok = False
+    if not ok:
+        try:
+            store.set_character_error(project_id, char_id)
+        except Exception:
+            pass
+    await hub.broadcast({"type": "character_complete", "project_id": project_id,
+                         "character_id": char_id, "ok": ok})
+
+
 # ------------------------------- REST -------------------------------
+
+@app.get("/healthz")
+async def healthz():
+    """Readiness probe for the Electron splash / RunPod. uvicorn only starts after the launcher
+    confirms the engine is ready, so a 200 here means the whole app is up."""
+    engine_ok = False
+    try:
+        timeout = aiohttp.ClientTimeout(total=3)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            await comfy.system_stats(session)
+            engine_ok = True
+    except Exception:
+        engine_ok = False
+    return {"ok": True, "engine": engine_ok}
+
 
 @app.get("/api/config")
 async def api_config():
@@ -257,6 +452,11 @@ async def api_config():
         "models": model_mgr.model_status(os.path.join(ROOT, settings["models_dir"]), settings),
         "all_required_present": model_mgr.all_required_present(
             os.path.join(ROOT, settings["models_dir"]), settings),
+        "environment": {
+            "mode": env_mod.mode(),
+            "allow_locate": env_mod.allow_locate(),
+            "folder_browser": env_mod.folder_browser(),
+        },
     }
 
 
@@ -360,16 +560,13 @@ async def api_upload_media(file: UploadFile = File(...)):
     }
 
 
-@app.post("/api/generate")
-async def api_generate(req: Request):
-    params = await req.json()
-    if not model_mgr.all_required_present(os.path.join(ROOT, settings["models_dir"]), settings):
-        return JSONResponse({"error": "Some required models are missing. Open the Models panel."},
-                            status_code=400)
-    # Free the voice engine (and its GPU memory) before video generation so the audio model doesn't
-    # hold VRAM while the LTX/ComfyUI engine runs — the QA machine saw video gen slow down when the
-    # CosyVoice subprocess lingered. stop() is a no-op if the engine isn't running; it reloads lazily
-    # on the next synthesize call.
+async def _queue_prompt(params):
+    """Build and queue a prompt on ComfyUI, freeing the voice engine's VRAM first. Returns
+    (prompt_id, seed). Shared by normal generations and character reference-video generations.
+
+    Freeing the voice engine before video generation stops the audio model from holding VRAM while
+    the LTX/ComfyUI engine runs (the QA machine saw video gen slow down when the CosyVoice subprocess
+    lingered). stop() is a no-op if the engine isn't running; it reloads lazily on the next synth."""
     try:
         await asyncio.get_event_loop().run_in_executor(None, tts_svc.stop)
     except Exception:
@@ -379,6 +576,27 @@ async def api_generate(req: Request):
         prompt_id = await comfy.queue_prompt(session, prompt)
     _current["prompt_id"] = prompt_id
     _current["errored"] = False
+    return prompt_id, seed
+
+
+@app.post("/api/generate")
+async def api_generate(req: Request):
+    params = await req.json()
+    if not model_mgr.all_required_present(os.path.join(ROOT, settings["models_dir"]), settings):
+        return JSONResponse({"error": "Some required models are missing. Open the Models panel."},
+                            status_code=400)
+    prompt_id, seed = await _queue_prompt(params)
+    _current["project_id"] = params.get("project_id")
+    _current["character"] = None
+    timeline = params.get("timeline") or {}
+    _current["meta"] = {
+        "prompt": timeline.get("global_prompt") or params.get("prompt") or "",
+        "seed": seed,
+        "resolution": params.get("resolution"),
+        "aspect": params.get("aspect"),
+        "fps": params.get("fps"),
+        "duration": params.get("duration"),
+    }
     await hub.broadcast({"type": "queued", "prompt_id": prompt_id, "seed": seed})
     return {"prompt_id": prompt_id, "seed": seed}
 
@@ -388,6 +606,362 @@ async def api_interrupt():
     async with aiohttp.ClientSession() as session:
         ok = await comfy.interrupt(session)
     return {"ok": ok}
+
+
+# ------------------------------- projects -------------------------------
+
+def _pick_path(title, mode="dir"):
+    """Pop a native OS folder/file picker in a short-lived subprocess and return the chosen path.
+
+    Run out-of-process so tkinter's main-thread requirement never clashes with the asyncio loop.
+    `mode` is "dir" (askdirectory) or "file" (askopenfilename). Returns "" if cancelled/unavailable."""
+    import subprocess
+    import sys
+    picker = "askopenfilename" if mode == "file" else "askdirectory"
+    code = (
+        "import tkinter as tk\n"
+        "from tkinter import filedialog\n"
+        "r = tk.Tk(); r.withdraw(); r.attributes('-topmost', True)\n"
+        "p = filedialog.%s(title=%r)\n"
+        "print(p or '')\n" % (picker, title or "Select")
+    )
+    try:
+        res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=300)
+        return (res.stdout or "").strip()
+    except Exception:
+        return ""
+
+
+def _pick_directory(title):
+    return _pick_path(title, "dir")
+
+
+# ---- server-side folder browser (RunPod: no native OS dialog on a headless container) ----
+# Confined to AIVB_PROJECTS_ROOT via the same realpath containment check the project store uses.
+
+def _fs_root():
+    root = env_mod.projects_root()
+    os.makedirs(root, exist_ok=True)
+    return root
+
+
+def _fs_resolve(path):
+    """Resolve `path` (or the root when blank) and confirm it stays inside the root. Returns an
+    absolute path or None if it escapes the root."""
+    root = _fs_root()
+    target = os.path.abspath(path) if (path or "").strip() else root
+    if target == root or projects_mod._within(root, target):
+        return target
+    return None
+
+
+@app.get("/api/fs/list")
+async def api_fs_list(path: str = ""):
+    target = _fs_resolve(path)
+    if target is None or not os.path.isdir(target):
+        target = _fs_root()
+    root = _fs_root()
+    try:
+        dirs = sorted(
+            ({"name": e.name, "path": os.path.join(target, e.name)}
+             for e in os.scandir(target) if e.is_dir() and not e.name.startswith(".")),
+            key=lambda d: d["name"].lower())
+    except OSError:
+        dirs = []
+    parent = None if os.path.abspath(target) == root else os.path.dirname(target)
+    return {"path": target, "root": root, "parent": parent, "dirs": dirs, "can_mkdir": True}
+
+
+@app.post("/api/fs/mkdir")
+async def api_fs_mkdir(req: Request):
+    body = await req.json()
+    parent = _fs_resolve(body.get("path") or "")
+    name = projects_mod._safe_folder_name(body.get("name") or "")
+    if parent is None:
+        return JSONResponse({"ok": False, "error": "Path is outside the allowed root."}, status_code=400)
+    target = os.path.join(parent, name)
+    if _fs_resolve(target) is None:
+        return JSONResponse({"ok": False, "error": "Invalid folder name."}, status_code=400)
+    try:
+        os.makedirs(target, exist_ok=True)
+    except OSError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return {"ok": True, "path": target}
+
+
+@app.get("/api/projects")
+async def api_projects_list():
+    return {"projects": store.list_projects()}
+
+
+@app.post("/api/projects/pick-dir")
+async def api_projects_pick_dir(req: Request):
+    body = await req.json()
+    title = body.get("title") or "Select folder"
+    path = await asyncio.get_event_loop().run_in_executor(None, lambda: _pick_directory(title))
+    return {"path": path}
+
+
+@app.post("/api/pick-file")
+async def api_pick_file(req: Request):
+    body = await req.json()
+    title = body.get("title") or "Select a file"
+    path = await asyncio.get_event_loop().run_in_executor(None, lambda: _pick_path(title, "file"))
+    return {"path": path}
+
+
+@app.post("/api/projects")
+async def api_projects_create(req: Request):
+    body = await req.json()
+    try:
+        entry = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: store.create_project(
+                body.get("name"), body.get("location"), as_root=bool(body.get("asRoot"))))
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return {"ok": True, "project": entry}
+
+
+@app.post("/api/projects/locate")
+async def api_projects_locate(req: Request):
+    body = await req.json()
+    try:
+        entry = store.locate_project(body.get("path"))
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return {"ok": True, "project": entry}
+
+
+@app.get("/api/projects/{project_id}")
+async def api_project_get(project_id: str):
+    m = store.get_project(project_id)
+    if not m:
+        return JSONResponse({"ok": False, "error": "Project not found."}, status_code=404)
+    store.touch_opened(project_id)
+    media = [_media_urls(project_id, it) for it in m.get("media", [])]
+    characters = [_character_urls(project_id, c) for c in m.get("characters", [])]
+    return {"ok": True, "id": m["id"], "name": m["name"], "created": m.get("created"),
+            "path": m.get("path"), "media": media, "characters": characters}
+
+
+@app.post("/api/projects/{project_id}/rename")
+async def api_project_rename(project_id: str, req: Request):
+    body = await req.json()
+    try:
+        m = store.rename_project(project_id, body.get("name"))
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    if not m:
+        return JSONResponse({"ok": False, "error": "Project not found."}, status_code=404)
+    return {"ok": True}
+
+
+@app.delete("/api/projects/{project_id}")
+async def api_project_delete(project_id: str, deleteFiles: bool = False):
+    store.delete_project(project_id, delete_files=deleteFiles)
+    return {"ok": True}
+
+
+@app.delete("/api/projects/{project_id}/media/{media_id}")
+async def api_media_delete(project_id: str, media_id: str):
+    ok = store.delete_media(project_id, media_id)
+    return {"ok": ok}
+
+
+@app.get("/api/projects/{project_id}/file/{media_id}/{kind}")
+async def api_project_file(project_id: str, media_id: str, kind: str):
+    p = store.media_file_path(project_id, media_id, kind)
+    if not p:
+        return JSONResponse({"error": "Not found."}, status_code=404)
+    return FileResponse(p)
+
+
+@app.post("/api/projects/{project_id}/media/{media_id}/lastframe")
+async def api_set_lastframe(project_id: str, media_id: str, req: Request):
+    import base64
+    body = await req.json()
+    img = body.get("image") or ""
+    if "," in img:  # strip a data: URL prefix
+        img = img.split(",", 1)[1]
+    try:
+        raw = base64.b64decode(img)
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Invalid image."}, status_code=400)
+    item = store.set_last_frame(project_id, media_id, raw)
+    if not item:
+        return JSONResponse({"ok": False, "error": "Media not found."}, status_code=404)
+    return {"ok": True, "lastFrame": f"/api/projects/{project_id}/file/{media_id}/lastframe"}
+
+
+# ------------------------------- characters -------------------------------
+
+@app.get("/api/projects/{project_id}/characters")
+async def api_characters_list(project_id: str):
+    chars = store.list_characters(project_id)
+    return {"ok": True, "characters": [_character_urls(project_id, c) for c in chars]}
+
+
+@app.post("/api/projects/{project_id}/characters")
+async def api_character_create(project_id: str, req: Request):
+    """Register a character and kick off its mood reference-video generation (one segment per built-in
+    mood; low-res throwaway video; per-mood audio cropped from the raw generated track in the graph)."""
+    body = await req.json()
+    if not store.get_project(project_id):
+        return JSONResponse({"ok": False, "error": "Project not found."}, status_code=404)
+    if not model_mgr.all_required_present(os.path.join(ROOT, settings["models_dir"]), settings):
+        return JSONResponse({"ok": False, "error": "Some required models are missing. Open the Models panel."},
+                            status_code=400)
+    if _current.get("prompt_id") and _current.get("character"):
+        return JSONResponse({"ok": False, "error": "A character is already generating — please wait."},
+                            status_code=409)
+    ccfg = settings.get("characters", {})
+    moods_spec = ccfg.get("moods", [])
+    fps = float(settings.get("defaults", {}).get("frame_rate", 24))
+    frames = int(ccfg.get("mood_frames", 72))
+    line = ccfg.get("line", "")
+    timeline, moods_meta = wf.build_character_timeline(
+        body.get("description"), moods_spec, line, fps, frames)
+    char = store.create_character(project_id, body.get("name"), body.get("description"),
+                                  moods_meta, meta={"line": line, "fps": fps})
+    if not char:
+        return JSONResponse({"ok": False, "error": "Could not create the character."}, status_code=404)
+
+    marker = {"project_id": project_id, "character_id": char["id"], "moods": moods_meta, "fps": fps}
+    params = {
+        "timeline": timeline,
+        "resolution": ccfg.get("resolution", "480p"),
+        "aspect": ccfg.get("aspect", "portrait"),
+        "frame_rate": fps,
+        "use_custom_audio": False,
+        # On: mood reference clips must be clean speech with no soundtrack under them. The separation
+        # chain is NOT what made the clips sound robotic (normal generations run it and sound fine) —
+        # that was `stage2_steps` being cut to 1; see the steps comment below.
+        "enable_bg_music_removal": bool(ccfg.get("enable_bg_music_removal", True)),
+        "character": marker,
+    }
+    # The mood video is thrown away, but its AUDIO is the whole point, so the sampler steps can't be
+    # cut to the bone: stage 1 generates the speech and stage 2 re-denoises the audio latent from
+    # sigma 0.42 (node 18 feeds the stage-1 audio latent into the stage-2 sampler). `stage2_steps: 1`
+    # is a single crude Euler jump and leaves the speech under-denoised — it sounds robotic/electronic.
+    # Lower these only if you accept degraded reference audio; low `resolution` is the cheap knob.
+    if ccfg.get("stage1_steps"):
+        params["stage1_steps"] = int(ccfg["stage1_steps"])
+    if ccfg.get("stage2_steps"):
+        params["stage2_steps"] = int(ccfg["stage2_steps"])
+    try:
+        prompt_id, seed = await _queue_prompt(params)
+    except Exception as e:
+        store.set_character_error(project_id, char["id"])
+        return JSONResponse({"ok": False, "error": f"Could not start generation: {e}"}, status_code=500)
+    _current["project_id"] = None       # character gens don't file a normal MediaItem
+    _current["character"] = marker
+    _current["meta"] = {"prompt": timeline.get("global_prompt"), "seed": seed}
+    await hub.broadcast({"type": "queued", "prompt_id": prompt_id, "seed": seed,
+                         "character_id": char["id"]})
+    return {"ok": True, "character": _character_urls(project_id, char)}
+
+
+@app.delete("/api/projects/{project_id}/characters/{character_id}")
+async def api_character_delete(project_id: str, character_id: str):
+    return {"ok": store.delete_character(project_id, character_id)}
+
+
+@app.get("/api/projects/{project_id}/characters/{character_id}/file/{kind}")
+async def api_character_file(project_id: str, character_id: str, kind: str):
+    p = store.character_file_path(project_id, character_id, kind)
+    if not p:
+        return JSONResponse({"error": "Not found."}, status_code=404)
+    return FileResponse(p)
+
+
+@app.post("/api/projects/{project_id}/characters/{character_id}/use-mood")
+async def api_character_use_mood(project_id: str, character_id: str, req: Request):
+    """Copy a character's mood clip into the engine input bucket so the existing /api/tts/synthesize
+    clone path can use it as a reference. Returns the same shape as /api/upload-media plus ref_text."""
+    body = await req.json()
+    mood = body.get("mood")
+    src = store.character_file_path(project_id, character_id, f"mood-{mood}")
+    if not src:
+        return JSONResponse({"ok": False, "error": "That mood clip isn't available."}, status_code=404)
+    char = store.get_character(project_id, character_id) or {}
+    m = next((x for x in char.get("moods", []) if x.get("key") == mood), {})
+    ccfg = settings.get("characters", {})
+    spec = next((x for x in ccfg.get("moods", []) if x.get("key") == mood), {})
+    # The reference transcript should reflect what the CLIP actually says (not the prompt line). Use
+    # the stored transcript; if it's missing (Whisper was unavailable at generation time), transcribe
+    # the clip now and persist it. Tone can still fall back to the settings spec — it's just delivery
+    # guidance, not the transcript.
+    ref_text = (m.get("refText") or "").strip()
+    if not ref_text:
+        try:
+            data_t, status_t = await tts_svc.transcribe({"audio": src})
+            if status_t == 200 and data_t.get("ok"):
+                ref_text = (data_t.get("text") or "").strip()
+                if ref_text:
+                    store.set_mood_reftext(project_id, character_id, mood, ref_text)
+        except Exception:
+            pass
+    tone = m.get("tone") or spec.get("tone", "")
+    input_dir = os.path.join(ROOT, settings["engine_dir"], "input", _MEDIA_SUBFOLDER)
+    os.makedirs(input_dir, exist_ok=True)
+    ext = os.path.splitext(src)[1].lower() or ".flac"
+    name = _safe_name(f"{char.get('name', 'character')}-{mood}{ext}")
+    dest = os.path.join(input_dir, name)
+    if os.path.isfile(dest):
+        stem, e = os.path.splitext(name)
+        i = 1
+        while os.path.isfile(os.path.join(input_dir, f"{stem}_{i}{e}")):
+            i += 1
+        name = f"{stem}_{i}{e}"
+        dest = os.path.join(input_dir, name)
+    import shutil as _shutil
+    _shutil.copy2(src, dest)
+    return {
+        "ok": True,
+        "file": f"{_MEDIA_SUBFOLDER}/{name}",
+        "name": name,
+        "kind": "audio",
+        "url": f"/api/media?filename={name}&subfolder={_MEDIA_SUBFOLDER}&type=input",
+        "ref_text": ref_text,
+        "tone": tone,
+    }
+
+
+@app.post("/api/projects/{project_id}/characters/{character_id}/moods/{mood}/clip")
+async def api_character_mood_clip(project_id: str, character_id: str, mood: str,
+                                  file: UploadFile = File(...),
+                                  start: float = Form(0.0), end: float = Form(0.0)):
+    """Replace a mood's reference clip with a user-edited crop (a WAV exported by the browser crop
+    editor), transcribe the new clip, and store it + its new region. The transcript comes from the
+    actual edited audio."""
+    data = await file.read()
+    if not data:
+        return JSONResponse({"ok": False, "error": "Empty clip."}, status_code=400)
+    import tempfile as _tempfile
+    import time as _time
+    ref_text = ""
+    tmp = os.path.join(_tempfile.gettempdir(),
+                       f"moodclip_{character_id}_{_safe_name(mood)}_{int(_time.time()*1000)}.wav")
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+        try:
+            data_t, status_t = await tts_svc.transcribe({"audio": tmp})
+            if status_t == 200 and data_t.get("ok"):
+                ref_text = (data_t.get("text") or "").strip()
+        except Exception:
+            pass
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    m = await asyncio.get_event_loop().run_in_executor(
+        None, lambda: store.update_mood_clip(project_id, character_id, mood, data, start, end, ref_text))
+    if not m:
+        return JSONResponse({"ok": False, "error": "Character or mood not found."}, status_code=404)
+    return {"ok": True, "ref_text": ref_text,
+            "clip": f"/api/projects/{project_id}/characters/{character_id}/file/mood-{mood}"}
 
 
 @app.get("/api/media")
@@ -477,6 +1051,15 @@ async def api_tts_synthesize(req: Request):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
     if status == 200 and data.get("ok"):
+        # Keep the WAV in the engine input bucket (the timeline reads it from there), and, when a
+        # project is active, also retain a copy in the project so the speech shows in its media grid.
+        project_id = body.get("project_id")
+        if project_id:
+            try:
+                store.add_voice(project_id, out_path,
+                                {"text": text[:200], "duration": data.get("duration")})
+            except Exception:
+                pass
         return {
             "ok": True,
             "file": f"{_MEDIA_SUBFOLDER}/{name}",

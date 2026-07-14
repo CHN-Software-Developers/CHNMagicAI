@@ -8,7 +8,7 @@
   "output_dir": "output",
   "python_exe": "",
   "open_browser": true,
-  "comfy_startup_timeout_seconds": 300,
+  "comfy_startup_timeout_seconds": 700,
   "setup": {
     "auto": true,
     "base_python": "",
@@ -33,46 +33,19 @@
   "model_overrides": {},
   "resolution_presets": {
     "480p": {
-      "landscape": [
-        854,
-        480
-      ],
-      "portrait": [
-        480,
-        854
-      ],
-      "square": [
-        640,
-        640
-      ]
+      "landscape": [854, 480],
+      "portrait": [480, 854],
+      "square": [640, 640]
     },
     "720p": {
-      "landscape": [
-        1280,
-        720
-      ],
-      "portrait": [
-        720,
-        1280
-      ],
-      "square": [
-        960,
-        960
-      ]
+      "landscape": [1280, 720],
+      "portrait": [720, 1280],
+      "square": [960, 960]
     },
     "1080p": {
-      "landscape": [
-        1920,
-        1080
-      ],
-      "portrait": [
-        1080,
-        1920
-      ],
-      "square": [
-        1440,
-        1440
-      ]
+      "landscape": [1920, 1080],
+      "portrait": [1080, 1920],
+      "square": [1440, 1440]
     }
   },
   "defaults": {
@@ -89,6 +62,32 @@
     "seed": 0,
     "seed_mode": "randomize",
     "enable_bg_music_removal": false
+  },
+  "characters": {
+    "line": "I can't believe this.",
+    "mood_frames": 120,
+    "resolution": "480p",
+    "aspect": "portrait",
+    "stage1_steps": 20,
+    "stage2_steps": 4,
+    "enable_bg_music_removal": true,
+    "moods": [
+      {
+        "key": "sad",
+        "label": "Sad / Crying",
+        "prompt": "Close-up of the person crying intensely and sobbing uncontrollably. They struggle to speak between broken breaths, saying, \"{line}\" Tears stream continuously down both cheeks as they repeatedly wipe them away with trembling hands. Their eyes are red and watery, their face conveys overwhelming grief, and their voice cracks with deep emotional pain. Realistic facial expressions, natural crying motion, and authentic lip sync.",
+        "tone": "Speak in a sad, sorrowful, crying voice.",
+        "line": "I can't stop crying because the pain is unbearable."
+      },
+      {
+        "key": "neutral",
+        "label": "Neutral",
+        "transition": "The mood suddenly changes to a happy face.",
+        "prompt": "Speaking \"{line}\" calmly and plainly, neutral relaxed expression.",
+        "tone": "Speak in a calm, neutral tone.",
+        "line": "So this is how the whole thing actually works."
+      }
+    ]
   },
   "tts": {
     "enabled": true,

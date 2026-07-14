@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-AIVideoBuilder is distributed under the **GNU General Public License v3.0** (see `LICENSE`).
+CHNMagicAI is distributed under the **GNU General Public License v3.0** (see `LICENSE`).
 It bundles and builds upon the following third-party components. Each is used under its own
 license; all are GPL-3.0 or GPL-compatible. Their original license files are preserved inside
 their vendored directories under `engine/`.
@@ -63,8 +63,32 @@ this repository:
 
 **Voice-cloning ethics/consent:** the cloning path synthesizes speech in the likeness of a supplied
 reference voice. Only clone voices you have the right to use, and follow CosyVoice's own usage
-notice. AIVideoBuilder surfaces this caveat in the install panel. Verify each model's usage terms
+notice. CHNMagicAI surfaces this caveat in the install panel. Verify each model's usage terms
 before redistribution.
+
+## Bundled Python runtime (desktop app only)
+
+The **desktop (Electron)** build ships a self-contained Python 3.10 interpreter so end users need no
+prior Python installation. It is **not committed** to this repository — `desktop/fetch-python.mjs`
+downloads it at build time into `desktop/python/`, and `electron-builder` packages that tree into the
+`.exe`. The **RunPod** image instead uses the base image's distro Python (Ubuntu 22.04 `python3.10`),
+and the **repo/dev** run uses the developer's own Python — neither redistributes a Python runtime.
+
+The bundled interpreter is **python-build-standalone**, a relocatable redistribution of upstream
+CPython (not modified by us). It is a *build* of standard CPython plus statically-bundled support
+libraries; each retains its own license:
+
+| Component | Source | License | Notes |
+|---|---|---|---|
+| CPython | https://www.python.org | PSF License (BSD-style, GPL-compatible) | The interpreter and standard library. |
+| python-build-standalone | https://github.com/astral-sh/python-build-standalone | MPL-2.0 (build tooling) | astral-sh's build scripts that produce the relocatable distribution. MPL-2.0 is file-scoped copyleft and GPL-compatible; we redistribute the unmodified prebuilt artifact, not the build sources. |
+| Bundled support libs (OpenSSL, SQLite, libffi, zlib, bzip2, xz/liblzma, ncurses/readline, Tcl/Tk, …) | see the distribution's `licenses/` manifest | Various permissive (Apache-2.0 / BSD / MIT / OpenSSL / TCL, …) | Statically bundled into the interpreter by python-build-standalone. |
+
+The complete, authoritative per-component license texts ship **inside** the downloaded distribution
+(the `python/licenses/` directory and `PYTHON.json` manifest) and are packaged with the desktop app;
+that folder must not be stripped during packaging. All of the above are permissive or file-scoped and
+compatible with CHNMagicAI's GPL-3.0. We ship the prebuilt runtime **unmodified** — the MPL-2.0 build
+sources are available upstream at the URL above.
 
 ## Modification policy (GPL-3.0 §5a)
 
@@ -73,7 +97,7 @@ Vendored code under `engine/` is kept **pristine**. Application logic lives in o
 carries a dated notice:
 
 ```
-# Modified by AIVideoBuilder on <YYYY-MM-DD>: <what changed and why>
+# Modified by CHNMagicAI on <YYYY-MM-DD>: <what changed and why>
 ```
 
 and the change is logged in `CHANGES.md`. **Exception:** the vendored MSST tree inside the
@@ -84,5 +108,5 @@ which permits this. No other vendored files have been modified.
 
 ## Corresponding source
 
-The complete corresponding source for AIVideoBuilder and all bundled GPL components is available
+The complete corresponding source for CHNMagicAI and all bundled GPL components is available
 in this repository (the vendored components retain their upstream source under `engine/`).

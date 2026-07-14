@@ -1,4 +1,4 @@
-# AIVideoBuilder backend (installed into the vendored engine's Python env).
+# CHNMagicAI backend (installed into the vendored engine's Python env).
 # aiohttp is already provided by ComfyUI; listed for standalone dev envs.
 fastapi>=0.111
 uvicorn[standard]>=0.30
