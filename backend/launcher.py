@@ -19,6 +19,14 @@ CONFIG_PATH = os.path.join(ROOT, "config", "settings.json")
 LOCAL_CONFIG_PATH = os.path.join(ROOT, "config", "settings.local.json")
 
 
+def phase(pct, msg):
+    """Emit a machine-readable progress anchor for the Electron splash, plus a human line.
+
+    The splash parses `AIVB_PHASE|<pct>|<message>` from stdout; the streaming [setup]/[launcher]
+    lines fill in the detail message between anchors."""
+    print(f"AIVB_PHASE|{pct}|{msg}", flush=True)
+
+
 def load_settings():
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         settings = json.load(f)
@@ -26,6 +34,9 @@ def load_settings():
     if os.path.isfile(LOCAL_CONFIG_PATH):
         with open(LOCAL_CONFIG_PATH, "r", encoding="utf-8") as f:
             settings.update(json.load(f))
+    sys.path.insert(0, os.path.dirname(__file__))
+    import env as env_mod
+    env_mod.apply(settings)
     return settings
 
 
@@ -98,6 +109,7 @@ def ensure_setup_and_relaunch():
     engine_main = os.path.join(ROOT, settings["engine_dir"], "main.py")
     needs_setup = (not os.path.isfile(engine_main)) or not (settings.get("python_exe") and os.path.isfile(settings["python_exe"]))
     if needs_setup and settings.get("setup", {}).get("auto", True):
+        phase(5, "First-run setup: preparing the engine (this can take a while)...")
         sys.path.insert(0, os.path.dirname(__file__))
         import bootstrap
         bootstrap.main()
@@ -120,18 +132,22 @@ def main():
     yaml_path = write_extra_model_paths(settings)
     python_exe = resolve_python(settings)
 
+    phase(60, "Starting the video engine...")
     proc = start_comfy(settings, python_exe, yaml_path)
     try:
         if not wait_ready(settings):
             print("[launcher] ERROR: engine did not become ready in time.")
+            phase(60, "Engine did not become ready in time.")
             proc.terminate()
             return 1
         print("[launcher] engine ready.")
+        phase(92, "Engine ready. Starting the web server...")
 
         url = f"http://{settings['app_host']}:{settings['app_port']}/"
         if settings.get("open_browser", True):
             open_browser_later(url)
         print(f"[launcher] serving CHNMagicAI at {url}")
+        phase(100, "Ready")
 
         sys.path.insert(0, os.path.dirname(__file__))
         import uvicorn

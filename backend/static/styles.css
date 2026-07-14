@@ -2403,6 +2403,74 @@ body[data-screen="studio"] #screenStudio {
   width: 92vw;
 }
 
+/* Server-side folder browser (RunPod) */
+.fs-path {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  word-break: break-all;
+}
+.fs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+.fs-item {
+  text-align: left;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 12px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 14px;
+}
+.fs-item:hover {
+  border-color: var(--accent);
+  background: var(--panel);
+}
+.fs-up {
+  color: var(--muted);
+}
+.fs-empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 8px 2px;
+}
+.fs-newrow {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.fs-newrow input {
+  flex: 1;
+}
+.fs-status {
+  color: var(--bad);
+  font-size: 12px;
+  min-height: 16px;
+  margin-top: 6px;
+}
+.fs-hint {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
+}
+.fs-hint #fsSelected {
+  font-family: var(--mono);
+  color: var(--text);
+}
+
 /* Mood-clip crop editor */
 .crop-wave-wrap {
   position: relative;

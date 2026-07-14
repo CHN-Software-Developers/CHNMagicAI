@@ -87,6 +87,10 @@ async function init() {
   // Land on the projects workspace; the studio is prepped above and entered per project.
   loadProjects();
   setScreen("projects");
+  // First thing the user sees when required models are missing is the Models installer.
+  if (state.config && state.config.all_required_present === false) {
+    openModels();
+  }
 }
 
 function mkSeg(type, prompt = "", extra = {}) {
@@ -214,12 +218,79 @@ function renderProjects() {
 }
 
 async function pickDir(title) {
+  // On a headless runtime (RunPod) there is no native OS dialog on the server, so browse the
+  // runtime's own filesystem via an in-app modal. On desktop/repo the native picker is used.
+  if ((state.config?.environment?.folder_browser || "native") === "server") {
+    return serverPickDir(title);
+  }
   const res = await api("/api/projects/pick-dir", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
   });
   return (res && res.path) || "";
+}
+
+/* ---- server-side folder browser (RunPod) ---- */
+const fsBrowser = { path: "", resolve: null };
+
+function serverPickDir(title) {
+  $("folderTitle").textContent = title || "Select a folder";
+  $("fsNewName").value = "";
+  $("fsStatus").textContent = "";
+  openModal("folderModal");
+  fsLoad("");
+  return new Promise((resolve) => {
+    fsBrowser.resolve = resolve;
+  });
+}
+
+async function fsLoad(path) {
+  const data = await api(`/api/fs/list?path=${encodeURIComponent(path || "")}`);
+  fsBrowser.path = data.path;
+  $("fsPath").textContent = data.path;
+  $("fsSelected").textContent = data.path;
+  const list = $("fsList");
+  list.innerHTML = "";
+  if (data.parent != null) {
+    const up = document.createElement("button");
+    up.className = "fs-item fs-up";
+    up.textContent = "⬆ ..";
+    up.addEventListener("click", () => fsLoad(data.parent));
+    list.appendChild(up);
+  }
+  (data.dirs || []).forEach((d) => {
+    const b = document.createElement("button");
+    b.className = "fs-item";
+    b.textContent = "📁 " + d.name;
+    b.addEventListener("click", () => fsLoad(d.path));
+    list.appendChild(b);
+  });
+  $("fsEmpty").classList.toggle("hidden", (data.dirs || []).length > 0 || data.parent != null);
+}
+
+async function fsMkdir() {
+  const name = $("fsNewName").value.trim();
+  if (!name) return;
+  const res = await api("/api/fs/mkdir", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: fsBrowser.path, name }),
+  });
+  if (!res.ok) {
+    $("fsStatus").textContent = res.error || "Could not create the folder.";
+    return;
+  }
+  $("fsNewName").value = "";
+  $("fsStatus").textContent = "";
+  fsLoad(res.path); // step into the newly created folder
+}
+
+function fsClose(pathOrEmpty) {
+  closeModal("folderModal");
+  const r = fsBrowser.resolve;
+  fsBrowser.resolve = null;
+  if (r) r(pathOrEmpty || "");
 }
 
 async function pickFile(title) {
@@ -2057,6 +2128,11 @@ function onComplete(url, msg) {
 }
 
 /* ------------------------------- models ------------------------------- */
+function allowLocate() {
+  // RunPod is download-only; desktop/repo keep "Locate existing file". Defaults to allowed.
+  return state.config?.environment?.allow_locate !== false;
+}
+
 function refreshModelBadge() {
   const missing = (state.config.models || []).filter(
     (m) => m.required && !m.present,
@@ -2108,7 +2184,7 @@ function renderModels() {
             m.present
               ? ""
               : `<button class="btn btn-sm dl">Download</button>
-          <button class="btn btn-sm loc">Locate…</button>`
+          ${allowLocate() ? `<button class="btn btn-sm loc">Locate…</button>` : ""}`
           }
         </div>
       </div>
@@ -2116,7 +2192,8 @@ function renderModels() {
       <div class="model-sub dlmsg"></div>`;
     if (!m.present) {
       item.querySelector(".dl").addEventListener("click", () => download(m.id));
-      item.querySelector(".loc").addEventListener("click", () => locate(m.id));
+      const locBtn = item.querySelector(".loc");
+      if (locBtn) locBtn.addEventListener("click", () => locate(m.id));
     }
     list.appendChild(item);
   });
@@ -2681,10 +2758,20 @@ function wireEvents() {
   $("closeAdvanced").addEventListener("click", () =>
     closeModal("advancedModal"),
   );
+
+  // Server-side folder browser (RunPod)
+  $("closeFolder").addEventListener("click", () => fsClose(""));
+  $("fsMkdir").addEventListener("click", fsMkdir);
+  $("fsUse").addEventListener("click", () => fsClose(fsBrowser.path));
+  $("fsNewName").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); fsMkdir(); }
+  });
   // click on backdrop closes the modal
   document.querySelectorAll(".modal").forEach((m) =>
     m.addEventListener("pointerdown", (e) => {
-      if (e.target === m) closeModal(m.id);
+      if (e.target !== m) return;
+      if (m.id === "folderModal") fsClose(""); // resolve the pending pickDir promise
+      else closeModal(m.id);
     }),
   );
 

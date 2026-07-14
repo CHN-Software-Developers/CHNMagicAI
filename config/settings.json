@@ -8,7 +8,7 @@
   "output_dir": "output",
   "python_exe": "",
   "open_browser": true,
-  "comfy_startup_timeout_seconds": 300,
+  "comfy_startup_timeout_seconds": 700,
   "setup": {
     "auto": true,
     "base_python": "",

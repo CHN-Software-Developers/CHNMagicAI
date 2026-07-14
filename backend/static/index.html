@@ -655,6 +655,30 @@
       </div>
     </div>
 
+    <!-- Server-side folder browser (used when the runtime is headless, e.g. RunPod) -->
+    <div id="folderModal" class="modal">
+      <div class="modal-box modal-box-sm">
+        <div class="modal-head">
+          <h2 id="folderTitle">Select a folder</h2>
+          <button id="closeFolder" class="btn btn-ghost">✕</button>
+        </div>
+        <div class="modal-scroll">
+          <div id="fsPath" class="fs-path"></div>
+          <div id="fsList" class="fs-list"></div>
+          <div id="fsEmpty" class="fs-empty hidden">No sub-folders here.</div>
+          <div class="fs-newrow">
+            <input id="fsNewName" type="text" placeholder="New folder name" />
+            <button class="btn btn-sm" id="fsMkdir">+ Create folder</button>
+          </div>
+          <div id="fsStatus" class="fs-status"></div>
+        </div>
+        <div class="modal-foot">
+          <span class="fs-hint">Selected: <span id="fsSelected"></span></span>
+          <button class="btn btn-primary" id="fsUse">Use this folder</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Add-audio modal: upload a file OR generate speech -->
     <div id="audioModal" class="modal">
       <div class="modal-box">

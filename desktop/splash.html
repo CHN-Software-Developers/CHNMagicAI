@@ -1,0 +1,97 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Starting CHNMagicAI</title>
+    <style>
+      :root {
+        --bg: #0b1020;
+        --panel: #131a30;
+        --text: #e8ecff;
+        --muted: #8a93b8;
+        --accent: #6ea8ff;
+        --accent2: #b98bff;
+        --line: #26304f;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        background: radial-gradient(120% 120% at 50% 0%, #16203c 0%, var(--bg) 60%);
+        color: var(--text);
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        padding: 28px;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      .brand {
+        font-size: 24px;
+        font-weight: 700;
+        letter-spacing: 0.3px;
+        background: linear-gradient(90deg, var(--accent), var(--accent2));
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      .sub { font-size: 12px; color: var(--muted); margin-top: -10px; }
+      .barwrap {
+        width: 100%;
+        max-width: 380px;
+        height: 10px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        overflow: hidden;
+      }
+      .bar {
+        height: 100%;
+        width: 0%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, var(--accent), var(--accent2));
+        transition: width 0.35s ease;
+      }
+      /* Indeterminate shimmer while we have a message but no percentage yet */
+      .bar.indeterminate {
+        width: 35% !important;
+        animation: slide 1.2s ease-in-out infinite;
+      }
+      @keyframes slide {
+        0% { margin-left: -35%; }
+        100% { margin-left: 100%; }
+      }
+      .msg {
+        font-size: 13px;
+        color: var(--muted);
+        min-height: 18px;
+        text-align: center;
+        max-width: 420px;
+        line-height: 1.4;
+      }
+      .pct { font-size: 12px; color: var(--text); font-variant-numeric: tabular-nums; }
+    </style>
+  </head>
+  <body>
+    <div class="brand">CHNMagicAI</div>
+    <div class="sub">LTX Director 2 · local video studio</div>
+    <div class="barwrap"><div id="bar" class="bar indeterminate"></div></div>
+    <div id="pct" class="pct"></div>
+    <div id="msg" class="msg">Starting up…</div>
+    <script>
+      const bar = document.getElementById("bar");
+      const msg = document.getElementById("msg");
+      const pct = document.getElementById("pct");
+      window.splashApi.onProgress((p) => {
+        if (typeof p.pct === "number") {
+          bar.classList.remove("indeterminate");
+          bar.style.width = Math.max(0, Math.min(100, p.pct)) + "%";
+          pct.textContent = p.pct + "%";
+        }
+        if (p.msg) msg.textContent = p.msg;
+      });
+    </script>
+  </body>
+</html>

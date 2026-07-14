@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 import bootstrap
 import comfy_client
+import env as env_mod
 import models as model_mgr
 import projects as projects_mod
 import tts as tts_mod
@@ -56,6 +57,7 @@ def load_settings():
     if os.path.isfile(LOCAL_CONFIG_PATH):
         with open(LOCAL_CONFIG_PATH, "r", encoding="utf-8") as f:
             _deep_merge(settings, json.load(f))
+    env_mod.apply(settings)
     return settings
 
 
@@ -427,6 +429,21 @@ async def _finalize_character(history, character):
 
 # ------------------------------- REST -------------------------------
 
+@app.get("/healthz")
+async def healthz():
+    """Readiness probe for the Electron splash / RunPod. uvicorn only starts after the launcher
+    confirms the engine is ready, so a 200 here means the whole app is up."""
+    engine_ok = False
+    try:
+        timeout = aiohttp.ClientTimeout(total=3)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            await comfy.system_stats(session)
+            engine_ok = True
+    except Exception:
+        engine_ok = False
+    return {"ok": True, "engine": engine_ok}
+
+
 @app.get("/api/config")
 async def api_config():
     return {
@@ -435,6 +452,11 @@ async def api_config():
         "models": model_mgr.model_status(os.path.join(ROOT, settings["models_dir"]), settings),
         "all_required_present": model_mgr.all_required_present(
             os.path.join(ROOT, settings["models_dir"]), settings),
+        "environment": {
+            "mode": env_mod.mode(),
+            "allow_locate": env_mod.allow_locate(),
+            "folder_browser": env_mod.folder_browser(),
+        },
     }
 
 
@@ -612,6 +634,59 @@ def _pick_path(title, mode="dir"):
 
 def _pick_directory(title):
     return _pick_path(title, "dir")
+
+
+# ---- server-side folder browser (RunPod: no native OS dialog on a headless container) ----
+# Confined to AIVB_PROJECTS_ROOT via the same realpath containment check the project store uses.
+
+def _fs_root():
+    root = env_mod.projects_root()
+    os.makedirs(root, exist_ok=True)
+    return root
+
+
+def _fs_resolve(path):
+    """Resolve `path` (or the root when blank) and confirm it stays inside the root. Returns an
+    absolute path or None if it escapes the root."""
+    root = _fs_root()
+    target = os.path.abspath(path) if (path or "").strip() else root
+    if target == root or projects_mod._within(root, target):
+        return target
+    return None
+
+
+@app.get("/api/fs/list")
+async def api_fs_list(path: str = ""):
+    target = _fs_resolve(path)
+    if target is None or not os.path.isdir(target):
+        target = _fs_root()
+    root = _fs_root()
+    try:
+        dirs = sorted(
+            ({"name": e.name, "path": os.path.join(target, e.name)}
+             for e in os.scandir(target) if e.is_dir() and not e.name.startswith(".")),
+            key=lambda d: d["name"].lower())
+    except OSError:
+        dirs = []
+    parent = None if os.path.abspath(target) == root else os.path.dirname(target)
+    return {"path": target, "root": root, "parent": parent, "dirs": dirs, "can_mkdir": True}
+
+
+@app.post("/api/fs/mkdir")
+async def api_fs_mkdir(req: Request):
+    body = await req.json()
+    parent = _fs_resolve(body.get("path") or "")
+    name = projects_mod._safe_folder_name(body.get("name") or "")
+    if parent is None:
+        return JSONResponse({"ok": False, "error": "Path is outside the allowed root."}, status_code=400)
+    target = os.path.join(parent, name)
+    if _fs_resolve(target) is None:
+        return JSONResponse({"ok": False, "error": "Invalid folder name."}, status_code=400)
+    try:
+        os.makedirs(target, exist_ok=True)
+    except OSError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return {"ok": True, "path": target}
 
 
 @app.get("/api/projects")

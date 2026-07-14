@@ -47,6 +47,11 @@ def log(msg):
     print(f"[setup] {msg}", flush=True)
 
 
+def phase(pct, msg):
+    """Progress anchor for the Electron splash (see launcher.phase). Parsed from stdout."""
+    print(f"AIVB_PHASE|{pct}|{msg}", flush=True)
+
+
 def run(cmd, cwd=None):
     log("$ " + " ".join(str(c) for c in cmd))
     subprocess.check_call(cmd, cwd=cwd)
@@ -60,6 +65,9 @@ def load_settings():
         with open(LOCAL_CONFIG_PATH, "r", encoding="utf-8") as f:
             local = json.load(f)
         settings.update(local)
+    sys.path.insert(0, os.path.dirname(__file__))
+    import env as env_mod
+    env_mod.apply(settings)
     return settings
 
 
@@ -194,11 +202,13 @@ def ensure_deps(py, setup):
     pip(py, ["--upgrade", "pip"], trusted)
 
     if setup.get("auto_install_torch", True) and not _module_present(py, "torch"):
+        phase(30, "Installing PyTorch (GPU) — please wait...")
         log("installing PyTorch (CUDA). Change setup.torch_index_url for a different GPU/CPU build.")
         pip(py, TORCH_PKGS + ["--index-url", setup["torch_index_url"]], trusted)
 
     comfy_req = os.path.join(COMFY_DST, "requirements.txt")
     if os.path.isfile(comfy_req):
+        phase(45, "Installing engine dependencies...")
         log("installing ComfyUI requirements (sqlalchemy, filelock, blake3, Pillow, tqdm, comfy-aimdo, av, ...)")
         pip(py, ["-r", comfy_req], trusted)
 
@@ -487,7 +497,13 @@ def app_data_dir(*parts):
     """Return a platform-appropriate per-user app-data path under CHNMagicAI/, joined with *parts.
 
     This is the shared home for anything that must live OUTSIDE the repo working copy (voice-engine
-    install, the projects registry, etc.) so defaults never dump large trees into the checkout."""
+    install, the projects registry, etc.) so defaults never dump large trees into the checkout.
+
+    When AIVB_DATA_DIR is set (Electron desktop / RunPod /workspace), everything is relocated there
+    so app data lands on the writable/persistent volume instead of the OS app-data dir."""
+    override = (os.environ.get("AIVB_DATA_DIR") or "").strip()
+    if override:
+        return os.path.join(os.path.abspath(override), *parts)
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
     elif sys.platform == "darwin":
@@ -555,9 +571,12 @@ def main():
         log("setup.auto is false; skipping bootstrap.")
         py = settings.get("python_exe") or venv_python() or sys.executable
     else:
+        phase(10, "Verifying the engine source...")
         verify_engine_source()
+        phase(20, "Creating the Python environment...")
         py = ensure_venv(setup)
         ensure_deps(py, setup)
+        phase(55, "Finalizing setup...")
 
     save_local({"python_exe": py})
     with open(PY_PATH_FILE, "w", encoding="utf-8") as f:

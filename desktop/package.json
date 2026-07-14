@@ -1,0 +1,62 @@
+{
+  "name": "chnmagicai-desktop",
+  "version": "0.1.0",
+  "description": "The AI-powered filmmaking tool for your day-to-day work.",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "fetch-python": "node fetch-python.mjs",
+    "build": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.chnsoftwaredevelopers.chnmagicai",
+    "productName": "CHNMagicAI",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "splash.html",
+      "build/**"
+    ],
+    "extraResources": [
+      {
+        "from": "python",
+        "to": "python",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "..",
+        "to": "app-src",
+        "filter": [
+          "backend/**",
+          "config/**",
+          "engine/ComfyUI/**",
+          "workflows/**",
+          "LICENSE",
+          "THIRD_PARTY_NOTICES.md",
+          "!**/__pycache__/**",
+          "!engine/python/**",
+          "!engine/.setup_state.json",
+          "!engine/python_path.txt",
+          "!**/*.pyc"
+        ]
+      }
+    ],
+    "win": {
+      "target": "portable",
+      "icon": "build/icon.ico"
+    },
+    "portable": {
+      "artifactName": "CHNMagicAI-portable-${version}.exe"
+    }
+  }
+}

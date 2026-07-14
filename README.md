@@ -11,13 +11,29 @@ auto-download, and an output video player.
 
 ## Quick start
 
+Three ways to run the **same** app + web UI:
+
 ```
-run.bat          # Windows: boots the hidden engine + app, opens http://127.0.0.1:8188
+run.bat          # Windows (repo): boots the hidden engine + app, opens http://127.0.0.1:8188
 ```
 
-On first run, open the **Models** panel and either click **Download** for each required model or
-**Locate existing file** to point at models you already have (e.g. on an external drive). Edit
-`config/models_manifest.json` first if you want to change any download URL, version, or filename.
+- **Desktop app (Electron):** a one-click `.exe` that shows a progress splash while everything starts,
+  then loads the UI in a window — the web UI is still reachable in a browser at the same URL. See
+  [`desktop/README.md`](desktop/README.md).
+- **RunPod template:** a headless container behind RunPod's HTTP proxy; the accessible URL appears in
+  the RunPod dashboard. See [`docker/README-runpod.md`](docker/README-runpod.md).
+
+When a required model is missing the **Models** popup opens automatically. Click **Download** for each
+required model, or **Locate existing file** to point at models you already have (desktop/repo only;
+RunPod is download-only). Edit `config/models_manifest.json` first if you want to change any download
+URL or filename.
+
+### Run modes / env overrides
+
+The three entrypoints share one env-override layer (`backend/env.py`): `AIVB_ENV` (`desktop`|`runpod`),
+`AIVB_APP_HOST`/`AIVB_APP_PORT`, `AIVB_COMFY_HOST`/`AIVB_COMFY_PORT`, `AIVB_DATA_DIR` (relocate
+models/output/registry), `AIVB_BASE_PYTHON` (engine-venv base), `AIVB_OPEN_BROWSER`,
+`AIVB_PROJECTS_ROOT`. They let the desktop and RunPod builds reuse the repo launcher unchanged.
 
 ## Layout
 
