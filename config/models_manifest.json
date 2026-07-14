@@ -9,7 +9,7 @@
       "url": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/diffusion_models/ltx-2.3-22b-distilled-1.1_transformer_only_fp8_scaled.safetensors",
       "sha256": "0a1d7aac2b338e8ec7e832149f1dcf11c9323272482b1cca0673d229702370f0",
       "required": true,
-      "note": "Main video diffusion model. See awesome-ltx2 for the current download link."
+      "note": "Main video diffusion model."
     },
     {
       "id": "clip_text_encoder",
@@ -69,7 +69,7 @@
       "url": "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
       "sha256": "5f416311fa8172b65af67530758964708d29a317b830d689a51143b7f91913ed",
       "required": true,
-      "note": "Stage-2 latent spatial upscaler. Latest v1.1 on huggingface.co/Lightricks/LTX-2.3."
+      "note": "Stage-2 latent spatial upscaler."
     },
     {
       "id": "bandit_music_removal",
@@ -80,7 +80,7 @@
       "url": "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v.1.0.3/model_bandit_plus_dnr_sdr_11.47.chpt",
       "sha256": "c48284779f7d1258a6527d3aaa18a532d45c1f506e2dcc25d5ab179a8c5e2573",
       "required": false,
-      "note": "Optional (~142 MB). Only needed for the 'Remove background music' option. Splits audio into speech/music/effects and drops the music (keeps dialogue + SFX). BandIt Plus checkpoint from ZFTurbo's Music-Source-Separation-Training. No official single-file URL — use 'Locate existing file', or fetch model_bandit_plus_dnr_sdr_11.47.chpt via the MSST model list (github.com/ZFTurbo/Music-Source-Separation-Training)."
+      "note": "Optional (~142 MB). Only needed for the 'Remove background music' option to work."
     }
   ]
 }
