@@ -189,6 +189,11 @@ function createMainWindow() {
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
   mainWindow.setMenuBarVisibility(false);
+  // Pin the window title. By default Electron renames the window to the loaded page's
+  // <title>; a stale cached page can carry the old "CHNMagicAI — AI video studio". Blocking
+  // page-title-updated keeps the window title fixed regardless of the page or HTTP cache.
+  mainWindow.on("page-title-updated", (e) => e.preventDefault());
+  mainWindow.setTitle("CHNMagicAI");
   // Open target=_blank / external links in the system browser, keep app navigation in-window.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
