@@ -883,7 +883,14 @@ async def api_project_file(project_id: str, media_id: str, kind: str):
     p = store.media_file_path(project_id, media_id, kind)
     if not p:
         return JSONResponse({"error": "Not found."}, status_code=404)
-    return FileResponse(p)
+    resp = FileResponse(p)
+    # Give saved files a meaningful name instead of the URL's last segment ("video"/
+    # "media"). 'inline' keeps <video>/<img> playback unaffected while the Download
+    # buttons and the native player's download menu pick up this filename.
+    name = store.media_download_name(project_id, media_id, kind)
+    if name:
+        resp.headers["content-disposition"] = f'inline; filename="{name}"'
+    return resp
 
 
 @app.post("/api/projects/{project_id}/media/{media_id}/lastframe")
