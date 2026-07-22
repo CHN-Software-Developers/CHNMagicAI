@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>CHNMagicAI — AI video studio</title>
+    <title>CHNMagicAI</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body data-screen="projects" data-phase="setup">
@@ -17,7 +17,6 @@
         <span class="logo">🎬</span>
         <div>
           <h1>CHNMagicAI</h1>
-          <p class="tagline">local AI video studio</p>
         </div>
       </button>
 
@@ -711,6 +710,55 @@
         </div>
       </div>
     </div>
+
+    <!-- Generic confirm / prompt dialog (replaces window.confirm/alert/prompt) -->
+    <div id="dialogModal" class="modal">
+      <div class="modal-box modal-box-sm dialog-box">
+        <h3 id="dialogTitle" class="dialog-title"></h3>
+        <p id="dialogMessage" class="dialog-msg"></p>
+        <input id="dialogInput" class="dialog-input hidden" type="text" />
+        <div class="modal-foot dialog-foot">
+          <button id="dialogCancel" class="btn btn-ghost">Cancel</button>
+          <button id="dialogOk" class="btn btn-primary">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Floating mini-preview: a live generation you browsed away from. Click to re-expand. -->
+    <div
+      id="genDock"
+      class="gen-dock hidden no-preview"
+      title="Return to the generation"
+    >
+      <div class="gen-dock-media">
+        <img id="dockPreview" class="gen-dock-img" alt="" />
+        <video
+          id="dockPreviewVideo"
+          class="gen-dock-img hidden"
+          autoplay
+          loop
+          muted
+          playsinline
+        ></video>
+        <div class="gen-dock-spinner"><div class="spinner"></div></div>
+        <button
+          id="dockCancel"
+          class="gen-dock-cancel"
+          title="Cancel generation"
+        >
+          ✖
+        </button>
+      </div>
+      <div class="gen-dock-info">
+        <div class="gen-dock-stage" id="dockStage">Generating…</div>
+        <div class="gen-dock-bar">
+          <div class="gen-dock-bar-fill" id="dockBar"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast notifications -->
+    <div id="toastHost" class="toast-host" aria-live="polite"></div>
 
     <!-- Add-audio modal: upload a file OR generate speech -->
     <div id="audioModal" class="modal">

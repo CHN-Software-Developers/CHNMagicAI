@@ -7,7 +7,7 @@
 //
 // The heavy first-run dependency install still runs inside the launcher behind the splash.
 
-const { app, BrowserWindow, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, shell } = require("electron");
 const { spawn, spawnSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
@@ -184,8 +184,16 @@ function createMainWindow() {
     show: false,
     backgroundColor: "#0b1020",
     title: "CHNMagicAI",
+    // No default File/Edit/View/Window/Help menu bar — this is a single-purpose app.
+    autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
+  mainWindow.setMenuBarVisibility(false);
+  // Pin the window title. By default Electron renames the window to the loaded page's
+  // <title>; a stale cached page can carry the old "CHNMagicAI — AI video studio". Blocking
+  // page-title-updated keeps the window title fixed regardless of the page or HTTP cache.
+  mainWindow.on("page-title-updated", (e) => e.preventDefault());
+  mainWindow.setTitle("CHNMagicAI");
   // Open target=_blank / external links in the system browser, keep app navigation in-window.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
@@ -212,6 +220,8 @@ if (!gotLock) {
   });
 
   app.whenReady().then(() => {
+    // Drop the default application menu so no menu bar (or its Alt-toggle) appears.
+    Menu.setApplicationMenu(null);
     createSplash();
     startLauncher();
     pollHealth();

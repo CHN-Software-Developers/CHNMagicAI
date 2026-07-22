@@ -67,6 +67,23 @@ def _safe_folder_name(name):
     return cleaned or "project"
 
 
+def _slug(text, maxlen=48):
+    """Lowercased, filename-safe slug (alnum runs joined by single hyphens)."""
+    out = []
+    for c in (text or "").lower():
+        if c.isalnum():
+            out.append(c)
+        elif out and out[-1] != "-":
+            out.append("-")
+    return "".join(out).strip("-")[:maxlen].strip("-")
+
+
+def _stamp(iso):
+    """'2026-07-14T17:28:46+00:00' -> '20260714-172846' (empty if unparseable)."""
+    digits = "".join(ch for ch in (iso or "") if ch.isdigit())
+    return f"{digits[:8]}-{digits[8:14]}" if len(digits) >= 14 else ""
+
+
 def _within(base, target):
     """True if `target` resolves to a path inside `base` (path-traversal guard)."""
     try:
@@ -342,6 +359,29 @@ class ProjectStore:
         if not (_within(entry["path"], p) and os.path.isfile(p)):
             return None
         return p
+
+    def media_download_name(self, project_id, media_id, kind):
+        """Human-meaningful download filename: '<project>-<kind>-<timestamp><ext>'.
+
+        Without this the browser names every saved file after the URL's last path
+        segment, so downloads all collide as 'video'/'audio'/'media'. Including the
+        project, the kind and the item's creation time makes them identifiable and
+        unique. Returns None if the item/file can't be resolved."""
+        p = self.media_file_path(project_id, media_id, kind)
+        if not p:
+            return None
+        entry = self._entry(project_id)
+        manifest = self._load_manifest(entry) if entry else None
+        item = None
+        if manifest:
+            item = next((m for m in manifest["media"] if m.get("id") == media_id), None)
+        proj = _slug((entry or {}).get("name") or (manifest or {}).get("name")) or "project"
+        kind_label = {"video": "video", "audio": "audio", "lastframe": "frame"}.get(kind, kind)
+        parts = [proj, kind_label]
+        stamp = _stamp((item or {}).get("created"))
+        if stamp:
+            parts.append(stamp)
+        return "-".join(parts) + (os.path.splitext(p)[1] or "")
 
     # ------------------------------- characters -------------------------------
 

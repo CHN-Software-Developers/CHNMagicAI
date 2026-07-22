@@ -4,7 +4,97 @@
    docked shots that partition the duration; Motion (VIDEO) and AUDIO tracks hold free-placement
    clips you can drag anywhere and resize from either edge. */
 const $ = (id) => document.getElementById(id);
-const api = (p, opts) => fetch(p, opts).then((r) => r.json());
+
+// Robust JSON fetch: never throws. Network failures and non-JSON/error responses come back as
+// `{error: "<short message>"}` so callers can surface a meaningful toast instead of a raw crash.
+const api = async (p, opts) => {
+  try {
+    const r = await fetch(p, opts);
+    const ct = r.headers.get("content-type") || "";
+    if (ct.includes("application/json")) {
+      const data = await r.json();
+      if (!r.ok && data && data.error == null) data.error = `Request failed (${r.status}).`;
+      return data || {};
+    }
+    if (!r.ok) return { error: `Request failed (${r.status}).` };
+    return {};
+  } catch (e) {
+    return { error: "Can't reach the server. Check your connection and try again.", _netError: true };
+  }
+};
+
+/* ------------------------------- notifications & dialogs ------------------------------- */
+// Non-blocking toast. type: "info" | "success" | "error". Auto-dismisses; click ✕ to close early.
+// Replaces window.alert (blocking, and styled inconsistently across desktop/browser).
+function toast(message, type = "info", timeout = 5000) {
+  const host = $("toastHost");
+  if (!host) return console.warn("toast:", message);
+  const el = document.createElement("div");
+  el.className = `toast toast-${type}`;
+  el.innerHTML = `<span class="toast-msg"></span><button class="toast-x" title="Dismiss">✕</button>`;
+  el.querySelector(".toast-msg").textContent = message;
+  const close = () => {
+    el.classList.add("leaving");
+    setTimeout(() => el.remove(), 200);
+  };
+  el.querySelector(".toast-x").addEventListener("click", close);
+  host.appendChild(el);
+  requestAnimationFrame(() => el.classList.add("show"));
+  if (timeout) setTimeout(close, timeout);
+  return el;
+}
+
+// Promise-based confirm/prompt replacing window.confirm/prompt. window.prompt is disabled in
+// Electron (it silently returns null) — that's why project rename never worked in the desktop app.
+let _dialogResolve = null;
+function _openDialog({ title, message, value, withInput, okText, cancelText, danger }) {
+  return new Promise((resolve) => {
+    // If a dialog is somehow already open, resolve it as cancelled first.
+    if (_dialogResolve) _closeDialog(null);
+    _dialogResolve = resolve;
+    $("dialogTitle").textContent = title || "";
+    $("dialogTitle").classList.toggle("hidden", !title);
+    $("dialogMessage").textContent = message || "";
+    const input = $("dialogInput");
+    input.classList.toggle("hidden", !withInput);
+    if (withInput) input.value = value || "";
+    const ok = $("dialogOk");
+    ok.textContent = okText || "OK";
+    ok.classList.toggle("btn-danger", !!danger);
+    ok.classList.toggle("btn-primary", !danger);
+    $("dialogCancel").textContent = cancelText || "Cancel";
+    openModal("dialogModal");
+    if (withInput) {
+      input.focus();
+      input.select();
+    } else ok.focus();
+  });
+}
+function _closeDialog(result) {
+  closeModal("dialogModal");
+  const r = _dialogResolve;
+  _dialogResolve = null;
+  if (r) r(result);
+}
+// Returns true on confirm, false/null on cancel.
+function confirmDialog(message, opts = {}) {
+  return _openDialog({
+    message,
+    title: opts.title,
+    okText: opts.okText || "Confirm",
+    danger: opts.danger,
+  });
+}
+// Returns the entered string on OK, null on cancel.
+function promptDialog(message, value = "", opts = {}) {
+  return _openDialog({
+    message,
+    value,
+    withInput: true,
+    title: opts.title,
+    okText: opts.okText || "Save",
+  });
+}
 
 const MIN_LEN = 6; // frames (matches LTX Director MIN_SEGMENT_LENGTH)
 const PHASES = ["setup", "generating", "result"];
@@ -85,12 +175,58 @@ async function init() {
   cprevRenderFrame(0);
   setPhase("setup");
   // Land on the projects workspace; the studio is prepped above and entered per project.
-  loadProjects();
+  await loadProjects();
   setScreen("projects");
-  // First thing the user sees when required models are missing is the Models installer.
-  if (state.config && state.config.all_required_present === false) {
+  // If work is still running server-side (a generation or a model download) after a refresh/reopen,
+  // restore the matching UI and let the live WebSocket resume the progress. Only then fall back to
+  // auto-opening the Models installer when required models are missing.
+  const restored = await restoreActiveJob();
+  if (!restored && state.config && state.config.all_required_present === false) {
     openModels();
   }
+}
+
+// Re-enter whatever was in progress before the page was refreshed/closed (web only — closing the
+// desktop app kills the server, so /api/job returns nothing). Returns true if anything was restored.
+async function restoreActiveJob() {
+  const job = await api("/api/job");
+  if (!job || job.error) return false;
+  let restored = false;
+  const gen = job.generation;
+  if (gen && gen.kind === "generation" && gen.project_id) {
+    const res = await api(`/api/projects/${gen.project_id}`);
+    if (res && res.ok) {
+      state.currentProjectId = gen.project_id;
+      state.currentProject = res;
+      state.libTab = "media";
+      renderLibrary();
+      state.generating = true;
+      state.hasResult = false;
+      setScreen("studio");
+      // Reset the preview area, then seed the last known stage/progress; the WS continues it live.
+      $("genError").classList.add("hidden");
+      $("preview").removeAttribute("src");
+      $("previewVideo").removeAttribute("src");
+      $("genPreview").classList.remove("has-preview");
+      $("genDock")?.classList.add("no-preview");
+      const asp = $("aspect").value;
+      fitMediaBox($("genPreview"), aspectRatioStr(asp), asp !== "landscape");
+      setGenStage(gen.stage || "Generating…", gen.progress_pct);
+      setPhase("generating");
+      restored = true;
+    }
+  } else if (gen && gen.kind === "character") {
+    // A character reference video is still rendering; its library card already shows that state and
+    // the WS 'character_complete' will refresh it. Just let the user know.
+    toast("A character is still generating in the background.", "info");
+  }
+  // In-flight model downloads → re-open the Models panel so their progress is visible again.
+  if (job.downloads && job.downloads.length) {
+    await openModels();
+    job.downloads.forEach((d) => updateDownload(d));
+    restored = true;
+  }
+  return restored;
 }
 
 function mkSeg(type, prompt = "", extra = {}) {
@@ -144,17 +280,31 @@ function applyDefaults() {
 
 /* ------------------------------- phases / stepper ------------------------------- */
 function setPhase(p) {
+  state.phase = p;
   document.body.dataset.phase = p;
+  // While a generation is actually running, the stepper is locked: the only ways out of phase 2 are
+  // to cancel with the ✖ button, or to browse away (breadcrumbs/home) which docks the preview.
+  const genLock = state.generating && p === "generating";
+  document.body.classList.toggle("gen-locked", genLock);
   document.querySelectorAll(".stepper .step").forEach((el) => {
     const idx = PHASES.indexOf(el.dataset.step);
     const cur = PHASES.indexOf(p);
     el.classList.toggle("active", el.dataset.step === p);
     el.classList.toggle("done", idx < cur);
-    if (el.dataset.step === "setup") el.disabled = false;
+    if (el.dataset.step === "setup") el.disabled = genLock;
     else if (el.dataset.step === "generating")
       el.disabled = !(state.generating || p === "generating");
-    else if (el.dataset.step === "result") el.disabled = !state.hasResult;
+    else if (el.dataset.step === "result") el.disabled = !state.hasResult || genLock;
   });
+  updateGenDock();
+}
+
+// Show the floating mini-preview only while a generation is live AND the user has navigated away
+// from the studio (to browse media/projects). Clicking it re-expands to full phase 2.
+function updateGenDock() {
+  const dock = $("genDock");
+  if (!dock) return;
+  dock.classList.toggle("hidden", !(state.generating && state.screen !== "studio"));
 }
 
 /* ------------------------------- screens (workspace) ------------------------------- */
@@ -164,6 +314,7 @@ function setScreen(s) {
   if ((s === "library" || s === "studio") && state.currentProject) {
     $("crumbProject").textContent = state.currentProject.name || "Project";
   }
+  updateGenDock();
 }
 
 async function loadProjects() {
@@ -208,7 +359,7 @@ function renderProjects() {
         return;
       }
       if (!p.exists) {
-        alert("This project folder is missing. Use “Open existing…” to relocate it.");
+        toast("This project folder is missing. Use “Open existing…” to relocate it.", "error");
         return;
       }
       openProject(p.id);
@@ -318,7 +469,7 @@ async function newProject() {
     body: JSON.stringify({ name: baseName(folder), location: folder, asRoot: true }),
   });
   if (!res.ok) {
-    alert(res.error || "Could not create the project.");
+    toast(res.error || "Could not create the project.", "error");
     return;
   }
   await loadProjects();
@@ -334,7 +485,7 @@ async function openExisting() {
     body: JSON.stringify({ path }),
   });
   if (!res.ok) {
-    alert(res.error || "That folder is not a CHNMagicAI project.");
+    toast(res.error || "That folder is not a CHNMagicAI project.", "error");
     return;
   }
   await loadProjects();
@@ -342,15 +493,22 @@ async function openExisting() {
 }
 
 async function removeProject(id) {
-  if (!confirm("Remove this project from the list? (Files on disk are kept.)")) return;
-  await api(`/api/projects/${id}`, { method: "DELETE" });
+  if (
+    !(await confirmDialog("Remove this project from the list? Files on disk are kept.", {
+      okText: "Remove",
+      danger: true,
+    }))
+  )
+    return;
+  const res = await api(`/api/projects/${id}`, { method: "DELETE" });
+  if (res.error) return toast(res.error, "error");
   loadProjects();
 }
 
 async function openProject(id) {
   const res = await api(`/api/projects/${id}`);
   if (!res.ok) {
-    alert(res.error || "Could not open the project.");
+    toast(res.error || "Could not open the project.", "error");
     loadProjects();
     return;
   }
@@ -565,7 +723,13 @@ async function createCharacter() {
 }
 
 async function deleteCharacter(id) {
-  if (!confirm("Delete this character and its reference clips?")) return;
+  if (
+    !(await confirmDialog("Delete this character and its reference clips?", {
+      okText: "Delete",
+      danger: true,
+    }))
+  )
+    return;
   await api(`/api/projects/${state.currentProjectId}/characters/${id}`, {
     method: "DELETE",
   });
@@ -879,7 +1043,9 @@ function buildMediaCard(m) {
       (m.audio ? `<a class="mc-act" download href="${m.audio}" title="Download audio">⬇ Audio</a>` : "") +
       `<button class="mc-act mc-del" data-act="delete" title="Delete">${TRASH_SVG}</button>` +
       `</div></div>` +
-      (promptTxt ? `<p class="mc-prompt">${escapeHtml(promptTxt)}</p>` : "");
+      (promptTxt
+      ? `<p class="mc-prompt" title="${escapeHtml(promptTxt)}">${escapeHtml(promptTxt)}</p>`
+      : "");
     wireMediaCard(card, m);
     return card;
   }
@@ -914,7 +1080,9 @@ function buildMediaCard(m) {
     (m.lastFrame ? `<button class="mc-act" data-act="reuse" title="Use last frame in a new generation">↻ Reuse frame</button>` : "") +
     `<button class="mc-act mc-del" data-act="delete" title="Delete">${TRASH_SVG}</button>` +
     `</div></div>` +
-    (promptTxt ? `<p class="mc-prompt">${escapeHtml(promptTxt)}</p>` : "");
+    (promptTxt
+      ? `<p class="mc-prompt" title="${escapeHtml(promptTxt)}">${escapeHtml(promptTxt)}</p>`
+      : "");
   wireMediaCard(card, m);
   return card;
 }
@@ -942,7 +1110,13 @@ function wireMediaCard(card, m) {
 }
 
 async function deleteMedia(mediaId) {
-  if (!confirm("Delete this artifact and its files?")) return;
+  if (
+    !(await confirmDialog("Delete this artifact and its files?", {
+      okText: "Delete",
+      danger: true,
+    }))
+  )
+    return;
   await api(`/api/projects/${state.currentProjectId}/media/${mediaId}`, {
     method: "DELETE",
   });
@@ -965,7 +1139,7 @@ async function reuseLastFrame(url) {
       imageB64: res.imageB64,
     });
   } catch {
-    alert("Could not reuse that frame.");
+    toast("Could not reuse that frame.", "error");
   }
 }
 
@@ -1618,7 +1792,7 @@ async function extendVideo(m) {
     resetTimeline();
     addVideoShot(res, { doubleDuration: true });
   } catch {
-    alert("Could not load that video to extend.");
+    toast("Could not load that video to extend.", "error");
   }
 }
 
@@ -2002,6 +2176,12 @@ function startGenerating() {
   fitMediaBox($("genPreview"), aspectRatioStr(asp), asp !== "landscape");
   $("stageBar").style.width = "0%";
   $("stepBar").style.width = "0%";
+  // Reset the mini-dock preview so a stale frame from a previous run isn't shown.
+  const dimg = $("dockPreview");
+  const dvid = $("dockPreviewVideo");
+  if (dimg) dimg.removeAttribute("src");
+  if (dvid) dvid.removeAttribute("src");
+  $("genDock")?.classList.add("no-preview");
   setGenStage("Starting…", 0);
   setPhase("generating");
 }
@@ -2025,11 +2205,35 @@ function showPreview(dataUrl, mime) {
     img.src = dataUrl;
   }
   $("genPreview").classList.add("has-preview");
+  // Mirror the live frame into the floating mini-dock.
+  const dimg = $("dockPreview");
+  const dvid = $("dockPreviewVideo");
+  if (dimg && dvid) {
+    $("genDock").classList.remove("no-preview");
+    if (mime && mime.indexOf("video/") === 0) {
+      dimg.removeAttribute("src");
+      dimg.classList.add("hidden");
+      dvid.src = dataUrl;
+      dvid.classList.remove("hidden");
+    } else {
+      dvid.removeAttribute("src");
+      dvid.classList.add("hidden");
+      dimg.classList.remove("hidden");
+      dimg.src = dataUrl;
+    }
+  }
 }
 
 function setGenStage(label, overallPct) {
   $("stageLabel").textContent = label;
   if (overallPct != null) $("stageBar").style.width = `${overallPct}%`;
+  // Mirror into the mini-dock (single overall bar there).
+  const ds = $("dockStage");
+  if (ds) ds.textContent = label;
+  if (overallPct != null) {
+    const db = $("dockBar");
+    if (db) db.style.width = `${overallPct}%`;
+  }
 }
 
 function showGenError(message) {
@@ -2038,6 +2242,8 @@ function showGenError(message) {
   box.textContent = message;
   box.classList.remove("hidden");
   setGenStage("⚠️ Generation failed", null);
+  // If the user browsed away, the phase-2 error box is off-screen — surface it as a toast too.
+  if (state.screen !== "studio") toast(message, "error", 8000);
   setPhase("generating");
 }
 
@@ -2118,6 +2324,12 @@ function onComplete(url, msg) {
     v.src = url;
     $("downloadVideo").href = url;
     setPhase("result");
+    // If the user browsed away while it rendered, the docked preview just vanished — tell them the
+    // result landed in the library and refresh the grid so it appears.
+    if (state.screen !== "studio") {
+      toast("✅ Your video is ready in the project library.", "success", 7000);
+      if (state.currentProjectId) refreshLibrary();
+    }
     // The last frame is produced by the workflow itself (ImageFromBatch → SaveImage) and filed
     // into the project media item server-side, so there's nothing to capture on the client.
   } else {
@@ -2234,7 +2446,7 @@ async function locate(id) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id, path }),
   });
-  alert(res.message || (res.ok ? "Located" : "Failed"));
+  toast(res.message || (res.ok ? "Located" : "Failed"), res.ok ? "success" : "error");
   reloadModels();
 }
 
@@ -2749,6 +2961,33 @@ function wireEvents() {
     api("/api/interrupt", { method: "POST" }),
   );
 
+  // Generic confirm/prompt dialog.
+  $("dialogOk").addEventListener("click", () => {
+    const input = $("dialogInput");
+    _closeDialog(input.classList.contains("hidden") ? true : input.value);
+  });
+  $("dialogCancel").addEventListener("click", () => _closeDialog(null));
+  $("dialogInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      $("dialogOk").click();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      _closeDialog(null);
+    }
+  });
+
+  // Floating mini-preview: click anywhere (except ✖) to re-expand into phase 2.
+  $("genDock").addEventListener("click", (e) => {
+    if (e.target.closest("#dockCancel")) return;
+    setScreen("studio");
+    setPhase("generating");
+  });
+  $("dockCancel").addEventListener("click", (e) => {
+    e.stopPropagation();
+    api("/api/interrupt", { method: "POST" });
+  });
+
   $("openModels").addEventListener("click", openModels);
   $("closeModels").addEventListener("click", () => {
     stopTtsPolling();
@@ -2771,6 +3010,7 @@ function wireEvents() {
     m.addEventListener("pointerdown", (e) => {
       if (e.target !== m) return;
       if (m.id === "folderModal") fsClose(""); // resolve the pending pickDir promise
+      else if (m.id === "dialogModal") _closeDialog(null); // resolve the pending confirm/prompt
       else closeModal(m.id);
     }),
   );
@@ -2899,18 +3139,25 @@ function wireEvents() {
 
 async function renameCurrentProject() {
   if (!state.currentProjectId) return;
-  const name = (
-    prompt("Rename project:", state.currentProject.name || "") || ""
-  ).trim();
+  // Uses the in-app dialog, not window.prompt (which is disabled in the Electron desktop build —
+  // that's why rename silently did nothing there).
+  const entered = await promptDialog("Enter a new name for this project.", state.currentProject.name || "", {
+    title: "Rename project",
+    okText: "Rename",
+  });
+  if (entered == null) return;
+  const name = entered.trim();
   if (!name) return;
-  await api(`/api/projects/${state.currentProjectId}/rename`, {
+  const res = await api(`/api/projects/${state.currentProjectId}/rename`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
   });
+  if (res.error) return toast(res.error, "error");
   state.currentProject.name = name;
   $("libTitle").textContent = name;
   $("crumbProject").textContent = name;
+  toast("Project renamed.", "success", 3000);
 }
 
 function escapeHtml(s) {
