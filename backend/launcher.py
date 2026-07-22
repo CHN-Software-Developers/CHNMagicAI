@@ -138,7 +138,7 @@ def wait_ready(settings):
     import comfy_client
     client = comfy_client.ComfyClient(settings["comfy_host"], settings["comfy_port"])
     timeout = settings.get("comfy_startup_timeout_seconds", 300)
-    print(f"[launcher] waiting up to {timeout}s for engine to become ready...")
+    print(f"[launcher] waiting for the engine to become ready...")
     return asyncio.run(client.wait_until_ready(timeout=timeout))
 
 
